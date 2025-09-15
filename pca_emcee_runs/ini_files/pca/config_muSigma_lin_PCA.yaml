@@ -52,7 +52,7 @@ data:
   #     1 -> read from a file
   data_file: 
 
-  nl_model: 6
+  nl_model: 8
   #bacco_option: 'z_extrap_hmcode'
   #Nonlinear power spectrum
   #     0 -> HMcode
@@ -122,7 +122,7 @@ theory:
   params: ./ini_files/pca/params_model_hmcode_all_PCA.yaml   
 
 output: 
-  chain_name: fR_ReactEmu_lsst_y1_pcacuts_ReACTemus
+  chain_name: nDGP_ExtEmuDat_lsst_y1_pcacuts_ReACTemus
 sampler: 
   mcmc:
     verbose: True
@@ -130,5 +130,5 @@ sampler:
     n_live: 1000
     pool: 20
     resume: False
-    hdf5_name: fR_ReactEmu_lsst_y1_pcacuts_ReACTemus
+    hdf5_name: nDGP_ExtEmuDat_lsst_y1_pcacuts_ReACTemus
     
