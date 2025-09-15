@@ -1,0 +1,827 @@
+"""Modified Gravity Lensing: Forecasting Pipeline."""
+
+
+__author__ = ["M. Tsedrik", "O. Truttero"]
+__version__ = "0.1.0"
+__description__ = "MGL = Modified Gravity Lensing: Forecasting Pipeline"
+
+import numpy as np
+import yaml
+import time
+from .theory import Theory
+from .specs import LSSTSetUp, EuclidSetUp
+from .likelihood import MGLike
+from datetime import timedelta
+import MGrowth as mg
+from scipy import interpolate as itp
+from scipy.linalg import cholesky, solve_triangular
+import matplotlib.pyplot as plt
+import pyccl as ccl
+
+NL_MODEL_HMCODE = 0
+NL_MODEL_BACCO = 1
+NL_MODEL_NDGP = 2
+NL_MODEL_GAMMAZ = 3
+NL_MODEL_MUSIGMA = 4
+NL_MODEL_DS = 5
+NL_MODEL_FOFR = 6
+NL_MODEL_FOFR_EMANTIS = 7
+NL_MODEL_NDGP_EMU = 8
+NL_MODEL_MGROWTH = 9
+
+BIAS_LIN = 0
+BIAS_HEFT = 2
+
+COMP_DATA = 0
+READ_DATA = 1
+
+a_arr_for_mu = np.logspace(-5., 1., 512)
+        
+def _errorbars_for_plots(nell, n, flat_array):
+    matrix_errs = np.zeros((nell, n, n))
+    idx_start = 0
+    for bin1 in range(n):
+        for bin2 in range(bin1, n):
+            matrix_errs[:, bin1, bin2] = flat_array[idx_start*nell:(idx_start+1)*nell]
+            matrix_errs[:, bin2, bin1] = matrix_errs[:, bin1, bin2]
+            idx_start += 1
+    return matrix_errs
+
+#flag_test_heft_new_extrap = True
+class DataClass():
+    """
+    A class to handle data operations for a given survey.
+
+    Attributes:
+    ----------
+
+    DataModel : Theory
+        An instance of the Theory class initialized with the survey and data model.
+    params_data_dic : dict
+        A dictionary containing the parameters for the data.
+    cov_obs : np.ndarray
+        The covariance matrix of the observed data.
+    det_obs : float
+        The determinant of the observed data covariance matrix.
+    ells : list
+        The ell values associated with the survey observable.
+    det_obs_high : float
+        The determinant of the high-resolution observed data covariance matrix.
+    data_vector : np.ndarray
+        The data vector for the survey observable.
+    data_covariance : np.ndarray
+        The covariance matrix of the data vector.
+    cholesky_transform : np.ndarray
+        The Cholesky decomposition of the data covariance matrix.
+
+    Methods:
+    -------
+    __init__(data_model: dict, Survey):
+        Initializes the DataClass with the given data model and survey.
+    
+    compute_data(Survey):
+        Computes the data based on the survey's likelihood and observable.
+    """
+    def __init__(self, data_model: dict, Survey):
+        if data_model['type'] == COMP_DATA:
+            self.DataModel = Theory(Survey, data_model)  
+            with open(data_model['params'], "r", encoding="utf-8") as file_in:
+                params_data = yaml.safe_load(file_in)
+            print('################################')
+            print('checking parameters for data....')
+            self.params_data_dic, status_data = self.DataModel.check_pars_ini(params_data)
+            if status_data:
+                print('all good with the data dictionary')
+            print('################################')
+            print('start computing mock data')
+            self.compute_data(Survey)
+            print('finish computing mock data')
+            print('################################')    
+        else:
+            raise NotImplementedError('Reading data from file is not implemented yet')   
+
+
+    def compute_data(self, Survey):
+        if Survey.likelihood == 'determinants':
+            compute_matrix = {
+            'WL': self.DataModel.compute_data_matrix_wl,
+            'GC': self.DataModel.compute_data_matrix_gc,
+            '3x2pt': self.DataModel.compute_data_matrix_3x2pt
+            }
+            assign_ell = {
+            'WL': Survey.ells_wl,
+            'GC': Survey.ells_gc,
+            '3x2pt': Survey.ells_wl
+            }
+            self.ells = assign_ell[Survey.observable]
+            if Survey.observable == '3x2pt':
+                self.cov_obs, self.cov_obs_high = compute_matrix[Survey.observable](self.params_data_dic)
+                self.det_obs = np.linalg.det(self.cov_obs) 
+                self.det_obs_high = np.linalg.det(self.cov_obs_high)
+            else:
+                self.cov_obs = compute_matrix[Survey.observable](self.params_data_dic)
+                self.det_obs = np.linalg.det(self.cov_obs)     
+        else:
+            compute_vector = {
+            'WL': self.DataModel.compute_data_vector_wl,
+            'GC': self.DataModel.compute_data_vector_gc,
+            '3x2pt': self.DataModel.compute_data_vector_3x2pt
+            }
+            # gaussian covariance with diagonal components only
+            compute_covariance = {
+            'WL': self.DataModel.compute_covariance_wl,
+            'GC': self.DataModel.compute_covariance_gc,
+            '3x2pt':  self.DataModel.compute_covariance_cosmosis_3x2pt 
+            }
+            print('computing data vector')
+            self.data_vector = compute_vector[Survey.observable](self.params_data_dic)
+            print('wl_masked_ells: ', sum(Survey.mask_data_vector_wl))
+            print('gc_masked_ells: ', sum(Survey.mask_data_vector_gc))
+            print('xc_masked_ells: ', sum(Survey.mask_data_vector_xc))
+            print('3x2pt_masked_ells: ', sum(Survey.mask_data_vector_3x2pt))
+            print('computing data covariance')
+            self.data_covariance = compute_covariance[Survey.observable](self.params_data_dic)
+
+            # hard-coded for now, best to move to plotting_scripts
+            plot_cov = False
+            if plot_cov:
+                cmap = 'seismic'
+                cov = self.data_covariance
+                ndata = cov.shape[0]
+                pp_norm = np.zeros((ndata,ndata))
+                for i in range(ndata):
+                    for j in range(ndata):
+                        pp_norm[i][j] = cov[i][j]/np.sqrt(cov[i][i]*cov[j][j])   
+                fig = plt.figure()
+                ax = fig.add_subplot(1, 1, 1)
+                im3 = ax.imshow(pp_norm, cmap=cmap, vmin=-1, vmax=1)
+                fig.colorbar(im3, orientation='vertical')
+                plt.show()
+            try:
+                self.cholesky_transform = cholesky(self.data_covariance, lower=True)
+                print('managed to do cholesky decomposition')
+                print('######CHOLESKY!!!!########')
+            except:                
+                self.inv_data_covariance = np.linalg.inv(self.data_covariance)   
+                print('failed to do cholesky decomposition')
+                print('######INVERSE COVARIANCE!!!!########') 
+
+            
+         
+
+class MGL():
+    """
+    A class to handle the initialization and operations of the MGL (Modified Gravity Lensing) pipeline.
+    This class is responsible for setting up the survey, checking the probe type, initializing data and theoretical models,
+    and computing various cosmological quantities such as power spectra, expansion rate, comoving distance, and error bars.
+    
+    Attributes:
+    ----------
+    config_dic : dict
+        Dictionary containing the configuration parameters loaded from the provided YAML file.
+    Survey : object
+        An instance of the survey setup class (e.g., LSSTSetUp or EuclidSetUp) based on the survey information in the configuration.
+    probe : str
+        The type of observable probe (e.g., '3x2pt', 'WL', 'GC').
+    path : str
+        The path for output files.
+    chain_name : str
+        The name of the output chain.
+    hdf5_name : str
+        The name of the HDF5 file for MCMC sampling.
+    mcmc_resume : bool
+        Flag indicating whether to resume MCMC sampling.
+    mcmc_verbose : bool
+        Flag indicating whether to enable verbose output for MCMC sampling.
+    mcmc_neff : int
+        The effective number of samples for MCMC.
+    mcmc_nlive : int
+        The number of live points for MCMC.
+    mcmc_pool : int
+        The number of processes in the pool for MCMC.
+    data_model_dic : dict
+        Dictionary containing the data model specifications.
+    theo_model_dic : dict
+        Dictionary containing the theoretical model specifications.
+    params_priors : dict
+        Dictionary containing the prior values of parameters.
+    params_model : list
+        List of parameter names that are not fixed.
+    params_fixed : dict
+        Dictionary containing the fixed parameter values.
+    params_fiducial : dict
+        Dictionary containing the fiducial parameter values.
+    Data : object
+        An instance of the DataClass initialized with the data model and survey.
+    TheoryModel : object
+        An instance of the Theory class initialized with the survey and theoretical model.
+    Like : object
+        An instance of the MGLike class initialized with the theoretical model and data.
+    
+    Methods:
+    -------
+    get_power_spectra(params, theo_model): 
+        Compute power spectra (mattre-matter, matter-galaxy, galaxy-galaxy).
+    get_expansion_and_rcom(params):
+        Compute expansion and comoving distance for a given cosmology.
+    get_c_ells(params, theo_model):
+        Compute angular power spectra for a given model.
+    get_errorbars(params):
+        Compute errorbars for angular power spectra from a Gaussian covariance.
+    get_sigma8_from_a_s_from_chain(params, nl_model):
+        Calculate the sigma8 parameter from a given set of cosmological parameters and a non-linear model from a chain.
+    gen_output_header():
+        Generates the output header for the configuration and parameters.
+    test():
+        Test-computation of a likelihood.
+    """
+    def __init__(self, config_file):
+        """Initialization requires a config yaml-file.
+        Here we save the specs, compute mock data, assign model-specs, etc.
+        """
+        with open(config_file, "r") as file_in:
+            self.config_dic = yaml.safe_load(file_in)
+
+        # initialise the Survey
+        if 'LSST' in self.config_dic['specs']['survey_info']:
+            self.Survey = LSSTSetUp(self.config_dic)
+        elif 'Euclid' in self.config_dic['specs']['survey_info']:
+            self.Survey = EuclidSetUp(self.config_dic)    
+        else:
+            raise ValueError('Invalid survey name')
+        if self.Survey.zz_integr[0]==0.:
+            raise ValueError('Invalid smallest redshift: z_min>0!!!')  
+        
+        # check the probe
+        self.probe = self.config_dic['observable']
+        if self.probe not in ['3x2pt', 'WL', 'GC']:
+            raise ValueError(f"Invalid probe type: {self.probe}. Must be '3x2pt', 'WL', or 'GC'.")
+ 
+        self.path = self.config_dic.get('path', './')
+        self.chain_name = self.config_dic['output']['chain_name']
+        sampler_dic = self.config_dic['sampler']['mcmc']
+        self.hdf5_name = sampler_dic['hdf5_name']
+        self.mcmc_resume = sampler_dic['resume']
+        self.mcmc_verbose = sampler_dic['verbose']
+        self.mcmc_neff = sampler_dic['n_eff']
+        self.mcmc_nlive = sampler_dic['n_live']
+        self.mcmc_pool = sampler_dic['pool']
+        
+        # save modelling choices
+        self.data_model_dic = self.config_dic['data']
+        self.theo_model_dic = self.config_dic['theory']
+
+        
+        # save values of parameters (cosmological and nuisances)
+        with open(self.config_dic['theory']['params'], "r", encoding="utf-8") as file_in:
+            params_dic = yaml.safe_load(file_in)
+        
+        # if sampling in bias*sigma8 change values of bias as bias = bias*sigma8 
+        if self.theo_model_dic['bias_model'] == 5:
+            for i in range(1, 6):
+                # change fiducials for test-runs
+                params_dic['b1_'+str(i)]['p0'] = params_dic['b1_'+str(i)]['p0']*params_dic['sigma8_cb']['p0']
+                # change prior ranges
+                if params_dic['b1_'+str(i)]['type'] == 'U':
+                    params_dic['b1_'+str(i)]['p1'] = params_dic['b1_'+str(i)]['p1']*params_dic['sigma8_cb']['p1']
+                    params_dic['b1_'+str(i)]['p2'] = params_dic['b1_'+str(i)]['p2']*params_dic['sigma8_cb']['p2']
+        if self.theo_model_dic['bias_model'] == 6:
+            for i in range(1, 6):
+                # change fiducials for test-runs
+                params_dic['b1L_'+str(i)]['p0'] = params_dic['b1L_'+str(i)]['p0']*params_dic['sigma8_cb']['p0']
+                params_dic['b2L_'+str(i)]['p0'] = params_dic['b2L_'+str(i)]['p0']*params_dic['sigma8_cb']['p0']
+                params_dic['bs2L_'+str(i)]['p0'] = params_dic['bs2L_'+str(i)]['p0']*params_dic['sigma8_cb']['p0']
+                params_dic['blaplL_'+str(i)]['p0'] = params_dic['blaplL_'+str(i)]['p0']*params_dic['sigma8_cb']['p0']
+                # change prior ranges
+                if params_dic['b1L_'+str(i)]['type'] == 'U':
+                    params_dic['b1L_'+str(i)]['p1'] = params_dic['b1L_'+str(i)]['p1']*params_dic['sigma8_cb']['p1']
+                    params_dic['b1L_'+str(i)]['p2'] = params_dic['b1L_'+str(i)]['p2']*params_dic['sigma8_cb']['p2']
+                if params_dic['b2L_'+str(i)]['type'] == 'U':
+                    params_dic['b2L_'+str(i)]['p1'] = params_dic['b2L_'+str(i)]['p1']*params_dic['sigma8_cb']['p1']
+                    params_dic['b2L_'+str(i)]['p2'] = params_dic['b2L_'+str(i)]['p2']*params_dic['sigma8_cb']['p2']
+                if params_dic['bs2L_'+str(i)]['type'] == 'U':
+                    params_dic['bs2L_'+str(i)]['p1'] = params_dic['bs2L_'+str(i)]['p1']*params_dic['sigma8_cb']['p1']
+                    params_dic['bs2L_'+str(i)]['p2'] = params_dic['bs2L_'+str(i)]['p2']*params_dic['sigma8_cb']['p2']
+                if params_dic['blaplL_'+str(i)]['type'] == 'U':
+                    params_dic['blaplL_'+str(i)]['p1'] = params_dic['blaplL_'+str(i)]['p1']*params_dic['sigma8_cb']['p1']
+                    params_dic['blaplL_'+str(i)]['p2'] = params_dic['blaplL_'+str(i)]['p2']*params_dic['sigma8_cb']['p2']
+        # initialise data 
+        self.Data = DataClass(self.data_model_dic, self.Survey)
+        # initialise model
+        self.TheoryModel = Theory(self.Survey, self.theo_model_dic)  
+
+        # need this later for Nautilus
+        self.params_priors = params_dic
+        self.params_model = [par for par in params_dic if params_dic[par]['type'] != 'F']
+        print('################################')
+        print('checking parameters for theory....')
+        self.params_fixed = {par: params_dic[par]['p0'] for par in params_dic if params_dic[par]['type'] == 'F'}
+        self.params_fiducial = {par: params_dic[par]['p0'] for par in params_dic if params_dic[par]['type'] != 'F'}
+        _, status_theo = self.TheoryModel.check_pars_ini(self.params_fixed|self.params_fiducial)
+        if status_theo:
+            print('all good with the model parameters')
+            print('################################')
+
+        # initialise the likelihood
+        self.Like = MGLike(self.TheoryModel, self.Data)
+
+
+    # functions bellow are not designed to be fast, but user-friendly instead
+    # so that one can plot and play with different avaliable settings
+    # without re-writing config-files
+    def get_loglike(self, params):
+        return self.Like.compute(params)    
+
+    def get_power_spectra(self, params, theo_model):
+        """
+        Calculate the power spectra for a given set of parameters and theoretical model.
+
+        Parameters:
+        ----------
+        params : dict
+            Dictionary containing the parameters for the theoretical model.
+        theo_model : dict
+            Dictionary containing the theoretical model specifications.
+
+        Returns:
+        -------
+        tuple
+            A tuple containing:
+            - k : array-like
+                The wave numbers.
+            - pmm : array-like
+                The matter power spectrum.
+            - pgm : array-like
+                The galaxy-matter cross power spectrum.
+            - pgg : array-like
+                The galaxy power spectrum.
+        """
+        NewModel = Theory(self.Survey, theo_model)
+        _, _, k = NewModel.get_ez_rz_k(params)
+        NewModel.k = k
+        if theo_model['nl_model'] == NL_MODEL_BACCO and 'sigma8_cb' not in params:
+            params['sigma8_cb'] = NewModel.StructureEmu.get_sigma8_cb(params)
+        if theo_model['nl_model'] == NL_MODEL_FOFR_EMANTIS and 'sigma8_lcdm' not in params:
+            params['sigma8_lcdm'] = NewModel.StructureEmu.HMcodeEmu.get_sigma8_lcdm(params)[0]   
+        pmm, bar_boost = NewModel.get_pmm(params)
+        NewModel.pmm = pmm
+        NewModel.pmm_no_barboost = NewModel.pmm/bar_boost
+        if NewModel.flag_cross_sqrt_bar_boost:
+            print('cross sqrt bar boost')
+            pgm = NewModel.get_pgm(params)*np.sqrt(bar_boost[:, :, None])                 
+        else:        
+            pgm = NewModel.get_pgm(params)     
+        pgg = NewModel.get_pgg(params)     
+        return k, pmm, pgm, pgg
+        
+    
+    def get_expansion_and_rcom(self, params):
+        """
+        Calculate the expansion rate and comoving distance.
+
+        Parameters:
+        ----------
+        params (dict): A dictionary of parameters required by the TheoryModel.
+
+        Returns:
+        -------
+        tuple: A tuple containing the expansion rate (ez) and comoving distance (rz).
+        """
+        ez, rz, _ = self.TheoryModel.get_ez_rz_k(params)
+        return ez, rz
+    
+    def get_windows(self, params, theo_model):
+        """
+        Compute the kernels (W) for different components based on the theoretical model and parameters provided.
+
+        Parameters:
+        ----------
+        params : dict
+            Dictionary containing the parameters required for the theoretical model.
+        theo_model : dict
+            Dictionary specifying the theoretical model to be used, including non-linear model and other configurations.
+
+        """
+        NewModel = Theory(self.Survey, theo_model)  
+        print('Theo model: ', theo_model)
+        if theo_model['nl_model'] == NL_MODEL_BACCO and 'sigma8_cb' not in params:
+            params['sigma8_cb'] = NewModel.StructureEmu.get_sigma8_cb(params) 
+        if theo_model['nl_model'] == NL_MODEL_FOFR_EMANTIS and 'sigma8_lcdm' not in params:
+            params['sigma8_lcdm'] = NewModel.StructureEmu.HMcodeEmu.get_sigma8_lcdm(params)[0]    
+        NewModel.ez, NewModel.rz, NewModel.k = NewModel.get_ez_rz_k(params)
+        NewModel.dz, _ = NewModel.StructureEmu.get_growth_binned(params, NewModel.k, NewModel.Survey.lbin, NewModel.Survey.zz_integr) if NewModel.flag_fofr else NewModel.StructureEmu.get_growth(params, NewModel.Survey.zz_integr)
+        NewModel.deltaz_s, NewModel.deltaz_l = NewModel.get_deltaz(params)
+        NewModel.pmm, bar_boost = NewModel.get_pmm(params)
+        NewModel.pmm_no_barboost = NewModel.pmm/bar_boost
+        if NewModel.flag_cross_sqrt_bar_boost:
+            NewModel.pgm = NewModel.get_pgm(params)*np.sqrt(bar_boost[:, :, None])                 
+        else:        
+            NewModel.pgm = NewModel.get_pgm(params)     
+        NewModel.pgg = NewModel.get_pgg(params)    
+        NewModel.w_gamma = NewModel.get_wl_kernel(params)
+        NewModel.w_ia = NewModel.get_ia_kernel(params)
+        NewModel.pk_delta_ia, NewModel.pk_iaia = NewModel.get_pk_ia(params)
+        NewModel.w_g = NewModel.get_gg_kernel(params)
+        return NewModel.w_gamma, NewModel.w_ia, NewModel.w_g  
+    
+
+    
+    def get_c_ells(self, params, theo_model):
+        """
+        Compute the angular power spectra (C_ells) for different components based on the theoretical model and parameters provided.
+
+        This method supports two computation modes:
+        - If the model requests CCL (Core Cosmology Library), the computation is delegated to `get_c_ells_CCL`, which uses pyccl for C_ell calculation.
+        - Otherwise, the spectra are computed using the internal pipeline.
+
+        Parameters
+        ----------
+        params : dict
+            Dictionary containing the parameters required for the theoretical model.
+        theo_model : dict
+            Dictionary specifying the theoretical model to be used, including non-linear model and other configurations.
+
+        Returns
+        -------
+        tuple
+            A tuple containing the following angular power spectra:
+            - cl_ll : array
+                Angular power spectrum for shear-shear correlations.
+            - cl_gg : array
+                Angular power spectrum for galaxy clustering correlations.
+            - cl_lg : array
+                Angular power spectrum for shear-galaxy cross-correlations.
+            - cl_gl : array
+                Angular power spectrum for galaxy-shear cross-correlations.
+        """
+        NewModel = Theory(self.Survey, theo_model)  
+        print('Theo model: ', theo_model)
+        if theo_model['nl_model'] == NL_MODEL_BACCO and 'sigma8_cb' not in params:
+            params['sigma8_cb'] = NewModel.StructureEmu.get_sigma8_cb(params) 
+        if theo_model['nl_model'] == NL_MODEL_FOFR_EMANTIS and 'sigma8_lcdm' not in params:
+            params['sigma8_lcdm'] = NewModel.StructureEmu.HMcodeEmu.get_sigma8_lcdm(params)[0]
+        NewModel.ez, NewModel.rz, NewModel.k = NewModel.get_ez_rz_k(params)
+        NewModel.dz, _ = NewModel.StructureEmu.get_growth_binned(params, NewModel.k, NewModel.Survey.lbin, NewModel.Survey.zz_integr) if NewModel.flag_fofr else NewModel.StructureEmu.get_growth(params, NewModel.Survey.zz_integr)
+        NewModel.deltaz_s, NewModel.deltaz_l = NewModel.get_deltaz(params)
+        NewModel.pmm, bar_boost = NewModel.get_pmm(params)
+        NewModel.pmm_no_barboost = NewModel.pmm/bar_boost
+        if NewModel.flag_cross_sqrt_bar_boost:
+            NewModel.pgm = NewModel.get_pgm(params)*np.sqrt(bar_boost[:, :, None])                 
+        else:        
+            NewModel.pgm = NewModel.get_pgm(params)     
+        NewModel.pgg = NewModel.get_pgg(params)    
+        NewModel.w_gamma = NewModel.get_wl_kernel(params)
+        NewModel.w_ia = NewModel.get_ia_kernel(params)
+        NewModel.pk_delta_ia, NewModel.pk_iaia = NewModel.get_pk_ia(params)
+        NewModel.w_g = NewModel.get_gg_kernel(params)
+        NewModel.pk_gal_ia = NewModel.get_pk_cross_ia(params)
+        cl_ll = NewModel.get_cell_shear()
+        cl_gg = NewModel.get_cell_galclust()    
+        cl_lg, cl_gl = NewModel.get_cell_cross() 
+        return cl_ll, cl_gg, cl_lg, cl_gl  
+    
+    def get_c_ells_CCL(self, params, theo_model):
+        """
+        Compute angular power spectra (C_ell) using pyccl for the given cosmological and nuisance parameters.
+
+        This method supports linear and HEFT bias models. It constructs the appropriate CCL cosmology and tracer objects,
+        computes the angular power spectra for lensing-lensing, galaxy-galaxy, and cross terms, and adds noise to the diagonals.
+
+        Parameters
+        ----------
+        params : dict
+            Dictionary of cosmological and nuisance parameters.
+        theo_model : dict
+            Dictionary specifying the theoretical model, including 'bias_model'.
+
+        Returns
+        -------
+        tuple of np.ndarray
+            cl_ll : (n_ell, nbin, nbin)
+                Shear-shear angular power spectra.
+            cl_gg : (n_ell, nbin, nbin)
+                Galaxy-galaxy angular power spectra.
+            cl_lg : (n_ell, nbin, nbin)
+                Shear-galaxy angular power spectra.
+            cl_gl : (n_ell, nbin, nbin)
+                Galaxy-shear angular power spectra.
+
+        Raises
+        ------
+        KeyError
+            If the bias model is not supported by this method.
+        """
+        bemu_nl = ccl.BaccoemuNonlinear()
+        cosmo_nl = ccl.Cosmology(
+            Omega_c=params['Omega_c'],
+            Omega_b=params['Omega_b'],
+            h=params['h'],
+            n_s=params['ns'],
+            sigma8=params['sigma8_cb'],
+            m_nu=params['Mnu'],
+            w0=params['w0'],
+            wa=params['wa'],
+            Omega_k=0.,
+            T_ncdm=0,
+            transfer_function='boltzmann_camb',
+            matter_power_spectrum=bemu_nl
+        )
+        bias_ia = params['a1_IA'] * (1. + self.Survey.zz_integr) ** params['eta1_IA'] * 0.0134 / 0.01387684609
+        nbin = self.Survey.nbin
+        n_ell = len(self.Survey.ell)
+        cl_ll = np.zeros((n_ell, nbin, nbin))
+        cl_gg = np.zeros((n_ell, nbin, nbin))
+        cl_lg = np.zeros((n_ell, nbin, nbin))
+        cl_gl = np.zeros((n_ell, nbin, nbin))
+
+        if theo_model['bias_model'] == BIAS_LIN:
+            b1_arr = np.array([params[f'b1_{i+1}'] for i in range(nbin)])
+            for i in range(nbin):
+                bias_g_i = np.ones_like(self.Survey.zz_integr) * b1_arr[i]
+                t_g_i = ccl.NumberCountsTracer(cosmo_nl, has_rsd=False, dndz=(self.Survey.zz_integr, self.Survey.eta_z_l[:, i]), 
+                                               bias=(self.Survey.zz_integr, bias_g_i), mag_bias=None)
+                t_l_i = ccl.WeakLensingTracer(cosmo_nl, dndz=(self.Survey.zz_integr, self.Survey.eta_z_s[:, i]),
+                                              ia_bias=(self.Survey.zz_integr, bias_ia))
+                for j in range(nbin):
+                    bias_g_j = np.ones_like(self.Survey.zz_integr) * b1_arr[j]
+                    t_g_j = ccl.NumberCountsTracer(cosmo_nl, has_rsd=False, dndz=(self.Survey.zz_integr, self.Survey.eta_z_l[:, j]),
+                                                   bias=(self.Survey.zz_integr, bias_g_j), mag_bias=None)
+                    t_l_j = ccl.WeakLensingTracer(cosmo_nl, dndz=(self.Survey.zz_integr, self.Survey.eta_z_s[:, j]),
+                                                  ia_bias=(self.Survey.zz_integr, bias_ia))
+                    cl_ll[:, i, j] = ccl.angular_cl(cosmo_nl, t_l_i, t_l_j, self.Survey.l_wl)
+                    cl_gg[:, i, j] = ccl.angular_cl(cosmo_nl, t_g_i, t_g_j, self.Survey.l_gc)
+                    cl_lg[:, i, j] = ccl.angular_cl(cosmo_nl, t_l_i, t_g_j, self.Survey.l_xc)
+                    cl_gl[:, i, j] = ccl.angular_cl(cosmo_nl, t_g_i, t_l_j, self.Survey.l_xc)
+
+        elif theo_model['bias_model'] == BIAS_HEFT:
+            min_k = np.log10(2.e-4 * params['h'])
+            max_k = np.log10(0.7 * params['h'])
+            heft = ccl.nl_pt.BaccoLbiasCalculator(
+                cosmo=cosmo_nl, log10k_min=min_k, log10k_max=max_k, nk_per_decade=20
+            )
+            heft.update_ingredients(cosmo_nl)
+            b1L = np.array([params[f'b1L_{i+1}'] + 1 for i in range(nbin)])
+            b2L = np.array([params[f'b2L_{i+1}'] * 2 for i in range(nbin)])
+            bs2 = np.array([params[f'bs2L_{i+1}'] * 2 for i in range(nbin)])
+            bLap = np.array([params[f'blaplL_{i+1}'] * 2 for i in range(nbin)])
+            pk_gg = [[None for _ in range(nbin)] for _ in range(nbin)]
+            pk_lg = [[None for _ in range(nbin)] for _ in range(nbin)]
+            pk_gl = [[None for _ in range(nbin)] for _ in range(nbin)]
+            for i in range(nbin):
+                for j in range(nbin):
+                    ptt_g_i = ccl.nl_pt.PTNumberCountsTracer(b1=(self.Survey.zz_integr, b1L[i] * np.ones(len(self.Survey.zz_integr))), b2=(self.Survey.zz_integr, b2L[i] * np.ones(len(self.Survey.zz_integr))),
+                                                             bs=(self.Survey.zz_integr, bs2[i] * np.ones(len(self.Survey.zz_integr))), bk2=(self.Survey.zz_integr, bLap[i] * np.ones(len(self.Survey.zz_integr))))
+                    ptt_g_j = ccl.nl_pt.PTNumberCountsTracer(b1=(self.Survey.zz_integr, b1L[j] * np.ones(len(self.Survey.zz_integr))), b2=(self.Survey.zz_integr, b2L[j] * np.ones(len(self.Survey.zz_integr))),
+                                                             bs=(self.Survey.zz_integr, bs2[j] * np.ones(len(self.Survey.zz_integr))), bk2=(self.Survey.zz_integr, bLap[j] * np.ones(len(self.Survey.zz_integr))))
+                    ptt_l_i = ccl.nl_pt.PTMatterTracer()
+                    ptt_l_j = ccl.nl_pt.PTMatterTracer()
+                    pk_gg[i][j] = heft.get_biased_pk2d(tracer1=ptt_g_i, tracer2=ptt_g_j)
+                    pk_lg[i][j] = heft.get_biased_pk2d(tracer1=ptt_l_i, tracer2=ptt_g_j)
+                    pk_gl[i][j] = heft.get_biased_pk2d(tracer1=ptt_g_i, tracer2=ptt_l_j)
+            bias_g = np.ones_like(self.Survey.zz_integr)
+            for i in range(nbin):
+                t_g_i = ccl.NumberCountsTracer(cosmo_nl, has_rsd=False, dndz=(self.Survey.zz_integr, self.Survey.eta_z_l[:, i]),
+                                               bias=(self.Survey.zz_integr, bias_g), mag_bias=None)
+                t_l_i = ccl.WeakLensingTracer(cosmo_nl, dndz=(self.Survey.zz_integr, self.Survey.eta_z_s[:, i]),
+                                               ia_bias=(self.Survey.zz_integr, bias_ia))
+                for j in range(nbin):
+                    t_g_j = ccl.NumberCountsTracer(cosmo_nl, has_rsd=False, dndz=(self.Survey.zz_integr, self.Survey.eta_z_l[:, j]),
+                                                   bias=(self.Survey.zz_integr, bias_g), mag_bias=None)
+                    t_l_j = ccl.WeakLensingTracer(
+                        cosmo_nl,
+                        dndz=(self.Survey.zz_integr, self.Survey.eta_z_s[:, j]),
+                        ia_bias=(self.Survey.zz_integr, bias_ia)
+                    )
+                    cl_ll[:, i, j] = ccl.angular_cl(cosmo_nl, t_l_i, t_l_j, self.Survey.l_wl)
+                    cl_gg[:, i, j] = ccl.angular_cl(cosmo_nl, t_g_i, t_g_j, self.Survey.l_gc, p_of_k_a=pk_gg[i][j])
+                    cl_lg[:, i, j] = ccl.angular_cl(cosmo_nl, t_l_i, t_g_j, self.Survey.l_xc, p_of_k_a=pk_lg[i][j])
+                    cl_gl[:, i, j] = ccl.angular_cl(cosmo_nl, t_g_i, t_l_j, self.Survey.l_xc, p_of_k_a=pk_gl[i][j])
+
+        else:
+            raise KeyError('CCL implementation currently supports only linear and HEFT bias models.')
+
+        # Add noise to the diagonal
+        for i in range(nbin):
+            cl_ll[:, i, i] += self.Survey.noise['LL']
+            cl_gg[:, i, i] += self.Survey.noise['GG']
+            cl_lg[:, i, i] += self.Survey.noise['LG']
+            cl_gl[:, i, i] += self.Survey.noise['GL']
+        return cl_ll, cl_gg, cl_lg, cl_gl
+
+    
+    def get_errorbars(self, params):
+        """
+        Calculate and return the error bars for different components of the survey data.
+
+        Parameters:
+        ----------
+        params : dict
+            Dictionary containing the parameters required to compute the covariance matrix.
+
+        Returns:
+        -------
+        tuple
+            A tuple containing the error bars for the following components:
+
+            - err_cl_ll: Error bars for the lensing-lensing component.
+            - err_cl_gg: Error bars for the galaxy-galaxy component.
+            - err_cl_lg: Error bars for the lensing-galaxy component.
+
+        
+        Notes:
+        -----
+        The method computes the covariance matrix for the 3x2pt data vector and extracts the error bars
+        by taking the square root of the diagonal elements of the covariance matrix. The error bars are
+        then split into different components based on the survey configuration.
+        """
+        mask_data_vector_3x2pt = np.ones(int(2*self.Survey.lbin*self.Survey.nbin_flat+self.Survey.lbin*self.Survey.nbin**2), dtype=bool)
+        self.Data.DataModel.Survey.mask_cov_3x2pt = np.ix_(mask_data_vector_3x2pt, mask_data_vector_3x2pt)
+        cov3x2pt = self.Data.DataModel.compute_covariance_3x2pt(params)
+        errorbars = np.sqrt(np.diag(cov3x2pt))
+        start_lg = self.Survey.lbin*self.Survey.nbin_flat 
+        start_gc = start_lg+self.Survey.lbin*self.Survey.nbin**2
+        
+        errorbars_ll = errorbars[:start_lg]
+        errorbars_lg = errorbars[start_lg:start_gc]
+        errorbars_gg = errorbars[start_gc:]
+        #return errorbars_ll, errorbars_gg, errorbars_lg, errorbars_gl
+        err_cl_ll = _errorbars_for_plots(self.Survey.nell_wl, self.Survey.nbin, errorbars_ll)
+        err_cl_gg = _errorbars_for_plots(self.Survey.nell_gc, self.Survey.nbin, errorbars_gg)
+        err_cl_lg = np.zeros((self.Survey.nell_xc, self.Survey.nbin, self.Survey.nbin))
+        idx_start = 0
+        for bin1 in range(self.Survey.nbin):
+            for bin2 in range(self.Survey.nbin):
+                err_cl_lg[:, bin1, bin2] = errorbars_lg[idx_start*self.Survey.nell_xc:(idx_start+1)*self.Survey.nell_xc]
+                idx_start += 1
+        return  err_cl_ll, err_cl_gg, err_cl_lg    
+
+    
+    def get_sigma8_from_a_s_from_chain(self, params, nl_model):
+        """
+        Calculate the sigma8 parameter from a given set of cosmological parameters and a non-linear model
+        from a chain.
+
+        Parameters:
+        ----------
+        self : object
+            Instance of the class containing this method.
+        params : dict
+            Dictionary containing cosmological parameters. 
+        nl_model : int
+            Non-linear model identifier. Expected values are NL_MODEL_HMCODE or NL_MODEL_BACCO for standard models, 
+            or other values for extended cosmologies.
+
+        Returns:
+        -------
+        sigma8 : numpy.ndarray
+            Array of sigma8 values calculated from the input parameters and non-linear model.
+        """
+        # initialise a theory class with hmcode
+        fid_model = {'nl_model': NL_MODEL_HMCODE, 'bias_model': 0, 'ia_model': 0, 'baryon_model': 0, 'photoz_err_model': 0.}
+        FidModel = Theory(self.Survey, fid_model)  
+        model =fid_model.copy()
+        model['nl_model'] = nl_model
+        # intialise a theory class with the target model
+        NewModel = Theory(self.Survey, model) 
+        #_ = FidModel.StructureEmu.check_pars_ini(params)
+        # if lcmd or w0wacdm, then use hmcode's sigma8-emulator 
+        if nl_model==NL_MODEL_HMCODE or nl_model==NL_MODEL_BACCO:
+            sigma8 = FidModel.StructureEmu.get_sigma8(params)
+        # for extended cosmologies do the re-scaling using linear growth factors   
+        else: 
+            sigma8_gr = FidModel.StructureEmu.get_sigma8(params, flag_gr=True) 
+            len_chain = len(sigma8_gr) 
+            D_rescale = np.zeros(len_chain)
+            for i in range(len_chain):
+                print(i, '/', len_chain)
+                params_growth = {
+                    'Omega_m': params['Omega_m'][i],
+                    'h' : params['h'][i],
+                    'w0': 0.,
+                    'wa': -1.,
+                    'log10Omega_rc': params['log10Omega_rc'][i] if 'log10Omega_rc' in params else 1.,
+                    'gamma0': params['gamma0'][i] if 'gamma0' in params else 0.55,
+                    'gamma1': params['gamma1'][i] if 'gamma1' in params else 0.,
+                    'mu0': params['mu0'][i] if 'mu0' in params else 0.,
+                    'Ads': params['Ads'][i] if 'Ads' in params else 0.,
+                    }
+                _, dz0_gr = FidModel.StructureEmu.get_growth(params_growth, [1.])
+                params_growth['w0'] = params['w0'][i] if 'w0' in params else -1.
+                _, dz0_mg = NewModel.StructureEmu.get_growth(params_growth, [1.])
+                D_rescale[i] = dz0_mg/dz0_gr
+            sigma8 = sigma8_gr*D_rescale
+        return sigma8
+        
+
+    def gen_output_header(self):
+        """Generates output header
+        """
+        def get_observable_label(value):
+            observable_map = {
+                'WL': "shear-shear",
+                'GC': "photo-clustering",
+                '3x2pt': "WL+XC+GC"
+            }
+            return observable_map.get(value, "Unknown")
+        def get_likelihood_label(value):
+            name_map = {
+                'determinants': "using determinants and summing over all integer ell-values",
+                'binned': "using covariance and differences between data vectors in ell-bins"
+            }
+            return name_map.get(value, "Unknown")
+
+        def get_model_label(value, model_type):
+            model_maps = {
+                "nl_model": {0: "HMcode", 1: "bacco", 2: "nDGP: ReACT", 3: "gLEMURS: ReACT", 4: "mu-Sigma: ReACT", 5:"Dark Scattering: ReACT", 6:"f(R): ReACT", 7: "f(R): EMANTIS", 8: "nDGPemu", 9: "scale-dep mu: MGrowth"},
+                "bias_model": {0: "b1 constant within bins", 1: "(b1, b2) constant within bins", 2: "HEFT", 3: 'HEFT with Pnl', 4: 'HEFT with Pnl*S', 5: 'sample in b1*sigma8', 6: 'sample in heft*sigma8'},
+                "ia_model": {0: "zNLA", 1: "TATT"},
+                "baryon_model": {0: "no baryons", 1: "Tagn HMcode", 2: "bcemu", 3: "bacco"},
+                "photoz_err_model": {0: "no photo-z error", 1: "additive mode, n(z') = n(z + dz)", 2: "multiplicative mode, n(z') = n(z(1 + dz))"}
+            }
+            return model_maps.get(model_type, {}).get(value, "Unknown")
+
+        config = self.config_dic
+        observable = get_observable_label(config.get("observable", -1))
+        like = get_likelihood_label(config.get("likelihood", -1))
+        output_header = f"""
+        ##############################################################
+        # Cosmology Pipeline Configuration
+        #------------------------------------------------------------
+        # Observable: {observable}
+        # Likelihood: {like}
+        # Sky Fraction (fsky): {self.Survey.fsky}
+        # Redshift Binning: {self.Survey.nbin} bins ({self.Survey.zmin} ≤ z ≤ {self.Survey.zmax})
+        # for n(z) {self.Survey.survey_name}-like
+        # Lensing & Clustering Scales:
+        #   - l_min: {self.Survey.lmin}
+        #   - l_max: {self.Survey.lmax}
+        #   - total l_bins: {self.Survey.lbin}
+        #   - cut in l_max (WL): {self.Survey.lmax_wl_vals}
+        #   - cut in l_max (GC, XC): {self.Survey.lmax_gc_vals}
+        #
+        """
+        if self.data_model_dic['type']==COMP_DATA:
+            output_header += f"""    
+            # Data Model:
+            #   - Nonlinear Power Spectrum: {get_model_label(self.data_model_dic.get("nl_model", -1), "nl_model")} ({self.data_model_dic.get("nl_model", "N/A")})
+            #   - Galaxy Bias Model: {get_model_label(self.data_model_dic.get("bias_model", -1), "bias_model")} ({self.data_model_dic.get("bias_model", "N/A")})
+            #   - Intrinsic Alignments: {get_model_label(self.data_model_dic.get("ia_model", -1), "ia_model")} ({self.data_model_dic.get("ia_model", "N/A")})
+            #   - Baryon Model: {get_model_label(self.data_model_dic.get("baryon_model", -1), "baryon_model")} ({self.data_model_dic.get("baryon_model", "N/A")})
+            #   - Cross Correlation sqrt(Baryonic Supression): {self.data_model_dic.get("cross_sqrt_baryon", False)} 
+            #   - Parameters: 
+            """
+            for par_i in self.Data.params_data_dic.keys():
+                output_header += f"\n            #       - {par_i}: {self.Data.params_data_dic[par_i]}"
+        else:
+            output_header += f"""    
+            # Data from the following file: {self.data_model_dic['data_file']}
+            #
+            """
+
+        output_header += f"""
+        #
+        # Theory Model:
+        #   - Nonlinear Power Spectrum: {get_model_label(self.theo_model_dic.get("nl_model", -1), "nl_model")} ({self.theo_model_dic.get("nl_model", "N/A")})
+        #   - Galaxy Bias Model: {get_model_label(self.theo_model_dic.get("bias_model", -1), "bias_model")} ({self.theo_model_dic.get("bias_model", "N/A")})
+        #   - Intrinsic Alignments: {get_model_label(self.theo_model_dic.get("ia_model", -1), "ia_model")} ({self.theo_model_dic.get("ia_model", "N/A")})
+        #   - Baryon Model: {get_model_label(self.theo_model_dic.get("baryon_model", -1), "baryon_model")} ({self.theo_model_dic.get("baryon_model", "N/A")})
+        #   - Cross Correlation sqrt(Baryonic Supression): {self.theo_model_dic.get("cross_sqrt_baryon", False)} 
+        #   - Photo-z Error Model: {get_model_label(self.theo_model_dic.get("photoz_err_model", -1), "photoz_err_model")} ({self.theo_model_dic.get("photoz_err_model", "N/A")})
+        #   - Parameter priors:
+        """
+        for par_i in self.params_priors.keys():
+            if self.params_priors[par_i]['type'] == 'G':
+                output_header += f"\n           #       - {par_i}: N({self.params_priors[par_i]['p1']},{self.params_priors[par_i]['p2']})"
+            elif self.params_priors[par_i]['type'] == 'U':
+                output_header += f"\n           #       - {par_i}: [{self.params_priors[par_i]['p1']},{self.params_priors[par_i]['p2']}]"   
+            elif self.params_priors[par_i]['type'] == 'F':
+                output_header += f"\n           #       - {par_i}: {self.params_priors[par_i]['p0']}"
+        output_header += f"""
+        ##############################################################
+        """
+        for par_i in self.params_model:
+            output_header += f"     {par_i}     "
+        output_header += "   log_w   log_l"    
+        return output_header
+
+
+    def test(self):
+        """
+        Evaluates one log-likelihood of the current parameter set and records the time taken for the evaluation.
+
+        This method constructs a dictionary of test parameters by combining fixed parameters and priors.
+        It then computes the log-likelihood using these parameters and measures the time taken for this computation.
+        The results, including the log-likelihood value and the time taken, are saved to a text file.
+        """ 
+        dic_test = {par_i: self.params_priors[par_i]['p0'] for par_i in self.params_priors.keys()}
+        dic_test = self.params_fixed | dic_test
+        start = time.time()
+        test_like = self.Like.compute(dic_test)    
+        finish = time.time()
+        test_time = finish-start
+        test_time_hms=timedelta(seconds=test_time)        
+        test_txt = f"""
+        ##############################################################
+        # loglikelihood = {test_like} evaluation took  {test_time} s (--> {test_time_hms} hh:mm:ss)
+        """
+        np.savetxt(self.path+"chains/chain_"+self.chain_name+".txt", [], header=self.gen_output_header()+test_txt)
