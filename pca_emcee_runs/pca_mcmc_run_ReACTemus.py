@@ -1,6 +1,5 @@
 import os
 os.environ["OMP_NUM_THREADS"] = "1"
-print(os.path.dirname(os.path.realpath(__file__)))
 #os.environ["OMP_PLACES"] = "threads"
 from nautilus import Prior, Sampler
 import numpy as np
@@ -9,6 +8,9 @@ import time
 from scipy.stats import norm
 import multiprocessing
 from datetime import timedelta
+folder = os.path.dirname(os.path.abspath(__file__))
+print(folder)
+os.chdir(folder)
 
 
 # Perform PCA with numpy.linalg.svd - find rotation matrix
@@ -103,7 +105,7 @@ def main():
     points, log_w, log_l = sampler.posterior()
     finish = time.time()
     chain_time = finish-start
-
+    print("total time = ", chain_time)
     np.savetxt("chains/chain_"+MGL_mu_lin.chain_name+".txt", np.c_[points, log_w, log_l], header=MGL_mu_lin.gen_output_header(), footer='log_Z = {log_z};  chain_time = {chain_time} (--> {chain_time_hms} hh:mm:ss)'.format(log_z=log_z, chain_time=chain_time, chain_time_hms=timedelta(seconds=chain_time)))
     
 
