@@ -52,7 +52,7 @@ data:
   #     1 -> read from a file
   data_file: 
 
-  nl_model: 8
+  nl_model: 0
   #bacco_option: 'z_extrap_hmcode'
   #Nonlinear power spectrum
   #     0 -> HMcode
