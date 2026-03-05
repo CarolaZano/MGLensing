@@ -87,9 +87,9 @@ data:
 
 theory:
   add_noise: False
-  nl_model: 4
+  nl_model: 6
   #bacco_option: 'z_extrap_hmcode'
-  option: 'linear' #'linear' or 'pseudo'
+  option: 'pseudo' #'linear' or 'pseudo'
   #Nonlinear power spectrum
   #     0 -> HMcode
   #     1 -> bacco
@@ -122,7 +122,7 @@ theory:
   params: ./ini_files/pca/params_model_hmcode_all_PCA.yaml   
 
 output: 
-  chain_name: fR_lsst_y1_pcacuts_ReACTemus_nDGPandGRonly
+  chain_name: fR_ReACTEmudat_nDGPGRonly_lsst_y1_pcacuts_ReACTemus_pseudo_Constrain-with-fRpseudo
 sampler: 
   mcmc:
     verbose: True
@@ -130,5 +130,5 @@ sampler:
     n_live: 1000
     pool: 20
     resume: False
-    hdf5_name: fR_lsst_y1_pcacuts_ReACTemus_nDGPandGRonly
+    hdf5_name: fR_ReACTEmudat_nDGPGRonly_lsst_y1_pcacuts_ReACTemus_pseudo_Constrain-with-fRpseudo
     

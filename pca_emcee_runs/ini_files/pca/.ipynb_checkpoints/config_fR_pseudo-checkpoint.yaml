@@ -53,7 +53,6 @@ data:
   data_file: 
 
   nl_model: 0
-  #bacco_option: 'z_extrap_hmcode'
   #Nonlinear power spectrum
   #     0 -> HMcode
   #     1 -> bacco
@@ -87,9 +86,8 @@ data:
 
 theory:
   add_noise: False
-  nl_model: 4
-  #bacco_option: 'z_extrap_hmcode'
-  #option: 'linear' #'linear' or 'pseudo'
+  nl_model: 6
+  option: 'pseudo' #'linear' or 'pseudo'
   #Nonlinear power spectrum
   #     0 -> HMcode
   #     1 -> bacco
@@ -119,10 +117,10 @@ theory:
   #     0 -> no photo-z error
   #     1 -> additive mode, n(z') = n(z + dz)
   #     2 -> multiplicative mode, n(z') = n(z(1 + dz))
-  params: ./ini_files/pca/params_model_hmcode_all.yaml   
+  params: ./ini_files/pca/params_model_hmcode_all_NLmodel.yaml   
 
 output: 
-  chain_name: lsst_y1_test_muSigma_nonlinps_nonlincuts
+  chain_name: lsst_y1_test_fr
 sampler: 
   mcmc:
     verbose: True
@@ -130,5 +128,5 @@ sampler:
     n_live: 1000
     pool: 20
     resume: False
-    hdf5_name:  lsst_y1_test_muSigma_nonlinps_nonlincuts
+    hdf5_name:  lsst_y1_test_fr
     

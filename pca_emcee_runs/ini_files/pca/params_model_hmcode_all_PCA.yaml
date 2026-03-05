@@ -36,7 +36,7 @@ ns:
   p2: 0.004
 
 mu0: 
-  type: 'U'
+  type: 'F'
   p0: 0.
   p1: -1.5
   p2: 1.5   
@@ -97,7 +97,7 @@ log10Omega_rc:
   p2: 2.
 
 log10f_R0: 
-  type: 'F'
+  type: 'U'
   p0: -5. #f_R0 = 1e-5
   p1: -10.
   p2: -3.

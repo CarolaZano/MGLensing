@@ -20,13 +20,13 @@ def findPCA(M_data, B_data, L_ch_inv):
 
 
 
-MGL_mu_lin = MGLensing.MGL("ini_files/pca/config_muSigma_lin_PCA.yaml")
+MGL_mu_lin = MGLensing.MGL("ini_files/pca/config_muSigma_pseudo_PCA.yaml")
 MGL_GR_nl = MGLensing.MGL("ini_files/pca/config_GR.yaml")
-MGL_GR_lin = MGLensing.MGL("ini_files/pca/config_GR_lin.yaml")
+MGL_GR_lin = MGLensing.MGL("ini_files/pca/config_GR_pseudo.yaml")
 MGL_nDGP_nl = MGLensing.MGL("ini_files/pca/config_nDGP.yaml")
-MGL_nDGP_lin = MGLensing.MGL("ini_files/pca/config_nDGP_lin.yaml")
-#MGL_fR_nl = MGLensing.MGL("ini_files/pca/config_fR.yaml")
-#MGL_fR_lin = MGLensing.MGL("ini_files/pca/config_fR_lin.yaml")
+MGL_nDGP_lin = MGLensing.MGL("ini_files/pca/config_nDGP_pseudo.yaml")
+##MGL_fR_nl = MGLensing.MGL("ini_files/pca/config_fR.yaml")
+#MGL_fR_lin = MGLensing.MGL("ini_files/pca/config_fR_pseudo.yaml")
 
 
 cov = MGL_mu_lin.Data.data_covariance

@@ -25,8 +25,8 @@ MGL_GR_nl = MGLensing.MGL("ini_files/pca/config_GR.yaml")
 MGL_GR_lin = MGLensing.MGL("ini_files/pca/config_GR_lin.yaml")
 MGL_nDGP_nl = MGLensing.MGL("ini_files/pca/config_nDGP.yaml")
 MGL_nDGP_lin = MGLensing.MGL("ini_files/pca/config_nDGP_lin.yaml")
-MGL_fR_nl = MGLensing.MGL("ini_files/pca/config_fR.yaml")
-MGL_fR_lin = MGLensing.MGL("ini_files/pca/config_fR_lin.yaml")
+#MGL_fR_nl = MGLensing.MGL("ini_files/pca/config_fR.yaml")
+#MGL_fR_lin = MGLensing.MGL("ini_files/pca/config_fR_lin.yaml")
 
 
 cov = MGL_mu_lin.Data.data_covariance
@@ -56,16 +56,16 @@ def log_probability_function(pars):
         # 1: find C_ell for non-linear matter power spectrum
 
         B1 = MGL_nDGP_nl.Like.compute_data_vector(param_dic_all)  
-        B2 = MGL_fR_nl.Like.compute_data_vector(param_dic_all)  
+        #B2 = MGL_fR_nl.Like.compute_data_vector(param_dic_all)  
         B3 = MGL_GR_nl.Like.compute_data_vector(param_dic_all)  
         # 2: find C_ell for linear matter power spectrum
         M1 = MGL_nDGP_lin.Like.compute_data_vector(param_dic_all)  
-        M2 = MGL_fR_lin.Like.compute_data_vector(param_dic_all)  
+        #M2 = MGL_fR_lin.Like.compute_data_vector(param_dic_all)  
         M3 = MGL_GR_lin.Like.compute_data_vector(param_dic_all)  
 
 
-        B_data =np.array([B1,B2,B3])
-        M_data =np.array([M1,M2,M3])
+        B_data =np.array([B1,B3])#np.array([B1,B2,B3])
+        M_data =np.array([M1,M3])#np.array([M1,M2,M3])
 
         # EXTRACT PCA MATRIX
         try:
