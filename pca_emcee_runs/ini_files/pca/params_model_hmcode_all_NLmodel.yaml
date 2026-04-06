@@ -34,13 +34,13 @@ ns:
   p2: 0.004
 
 mu0: 
-  type: 'F'
+  type: 'U'
   p0: 0.
   p1: -1.5
   p2: 1.5   
 
 sigma0: 
-  type: 'F'
+  type: 'U'
   p0: 0.
   p1: -1.5
   p2: 1.5  
@@ -95,7 +95,7 @@ log10Omega_rc:
   p2: 2.
 
 log10f_R0: 
-  type: 'U'
+  type: 'F'
   p0: -5. #f_R0 = 1e-5
   p1: -10.
   p2: -3.
@@ -128,27 +128,27 @@ beta_IA:
   p2: 5. 
 
 b1_1:
-  type: 'F'  
+  type: 'U'  
   p0: 1.562362 
   p1: 0.8
   p2: 3.       
 b1_2:
-  type: 'F'
+  type: 'U'
   p0: 1.732963
   p1: 0.8
   p2: 3.     
 b1_3:
-  type: 'F'
+  type: 'U'
   p0: 1.913252
   p1: 0.8
   p2: 3.    
 b1_4:
-  type: 'F'
+  type: 'U'
   p0: 2.100644
   p1: 0.8
   p2: 3.               
 b1_5:
-  type: 'F'
+  type: 'U'
   p0: 2.293210
   p1: 0.8
   p2: 3.  

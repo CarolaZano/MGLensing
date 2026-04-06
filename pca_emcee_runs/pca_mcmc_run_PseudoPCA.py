@@ -25,9 +25,18 @@ MGL_GR_nl = MGLensing.MGL("ini_files/pca/config_GR.yaml")
 MGL_GR_lin = MGLensing.MGL("ini_files/pca/config_GR_pseudo.yaml")
 MGL_nDGP_nl = MGLensing.MGL("ini_files/pca/config_nDGP.yaml")
 MGL_nDGP_lin = MGLensing.MGL("ini_files/pca/config_nDGP_pseudo.yaml")
-##MGL_fR_nl = MGLensing.MGL("ini_files/pca/config_fR.yaml")
-#MGL_fR_lin = MGLensing.MGL("ini_files/pca/config_fR_pseudo.yaml")
-
+MGL_fR_nl = MGLensing.MGL("ini_files/pca/config_fR.yaml")
+MGL_fR_lin = MGLensing.MGL("ini_files/pca/config_fR_pseudo.yaml")
+B_models = [
+    MGL_nDGP_nl,
+    MGL_fR_nl,
+    MGL_GR_nl
+]
+M_models = [
+    MGL_nDGP_lin,
+    MGL_fR_lin,
+    MGL_GR_lin
+]
 
 cov = MGL_mu_lin.Data.data_covariance
 D_data = MGL_mu_lin.Data.data_vector
@@ -54,18 +63,9 @@ def log_probability_function(pars):
 
         ### COMBINE
         # 1: find C_ell for non-linear matter power spectrum
-
-        B1 = MGL_nDGP_nl.Like.compute_data_vector(param_dic_all)  
-        #B2 = MGL_fR_nl.Like.compute_data_vector(param_dic_all)  
-        B3 = MGL_GR_nl.Like.compute_data_vector(param_dic_all)  
+        B_data  = np.array([m.Like.compute_data_vector(param_dic_all) for m in B_models])
         # 2: find C_ell for linear matter power spectrum
-        M1 = MGL_nDGP_lin.Like.compute_data_vector(param_dic_all)  
-        #M2 = MGL_fR_lin.Like.compute_data_vector(param_dic_all)  
-        M3 = MGL_GR_lin.Like.compute_data_vector(param_dic_all)  
-
-
-        B_data =np.array([B1,B3])#np.array([B1,B2,B3])
-        M_data =np.array([M1,M3])#np.array([M1,M2,M3])
+        M_data  = np.array([m.Like.compute_data_vector(param_dic_all) for m in M_models])
 
         # EXTRACT PCA MATRIX
         try:
@@ -103,8 +103,23 @@ def main():
     points, log_w, log_l = sampler.posterior()
     finish = time.time()
     chain_time = finish-start
-
-    np.savetxt("chains/chain_"+MGL_mu_lin.chain_name+".txt", np.c_[points, log_w, log_l], header=MGL_mu_lin.gen_output_header(), footer='log_Z = {log_z};  chain_time = {chain_time} (--> {chain_time_hms} hh:mm:ss)'.format(log_z=log_z, chain_time=chain_time, chain_time_hms=timedelta(seconds=chain_time)))
+    
+    # adjust the header to include the number of theories and their descriptions
+    header = MGL_mu_lin.gen_output_header()
+    n_theories = len(B_models)
+    # extract line 54 from each model header
+    theory_lines = []
+    for i in range(n_theories):
+        h1 = B_models[i].gen_output_header().splitlines()
+        h2 = M_models[i].gen_output_header().splitlines()
+        if len(h1) >= 54 and len(h2) >= 54:
+            theory_lines.append(h1[53] + " | " + h2[53])
+    extra_header = "\n# number of data reduction theories: {}\n".format(n_theories)
+    extra_header += "# data reduction theories:\n"
+    extra_header += "\n".join(theory_lines)
+    # combine headers
+    full_header = header + "\n" + extra_header
+    np.savetxt("chains/chain_"+MGL_mu_lin.chain_name+".txt", np.c_[points, log_w, log_l], header=full_header, footer='log_Z = {log_z};  chain_time = {chain_time} (--> {chain_time_hms} hh:mm:ss)'.format(log_z=log_z, chain_time=chain_time, chain_time_hms=timedelta(seconds=chain_time)))
     
 
 if __name__ == "__main__":

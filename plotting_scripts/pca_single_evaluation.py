@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import MGLensing
 import matplotlib.pyplot as plt
@@ -11,6 +12,8 @@ def findPCA(M_data, B_data, L_ch_inv):
     return Usvd, Delta
 
 
+# change directory from MGLensing/plotting_scripts to MGLensing
+os.chdir("../")
 
 MGL_mu_lin = MGLensing.MGL("ini_files/pca/config_muSigma_lin.yaml")
 ells_wl_bins = []
@@ -101,9 +104,7 @@ l_wl, l_gc, l_xc = MGL_mu_lin.Survey.l_wl, MGL_mu_lin.Survey.l_gc, MGL_mu_lin.Su
 
 
 # Interpolate and plot on each subplot
-for i in range(3):
-   
-
+for i in range(2):
     # Scatter points
     axs[0, 0].scatter(l_wl[:ells_wl_bins[0]], Delta[i][:ells_wl_bins[0]], color=colors1[i], label=labels1[i], marker=markers1[i])
     axs[0, 1].scatter(l_xc[:ells_xc_bins[0]], Delta[i][sum(ells_wl_bins):sum(ells_wl_bins)+ells_xc_bins[0]], color=colors1[i], label=labels1[i], marker=markers1[i])
@@ -113,7 +114,7 @@ axs[0, 0].set_title('Shear', fontsize=18)
 axs[0, 1].set_title('Cross', fontsize=18)
 axs[0, 2].set_title('Clustering', fontsize=18)
 
-for i in range(3):
+for i in range(2):
 
     # Scatter points
     axs[1, 0].scatter(l_wl[:ells_wl_bins[0]], -Usvd[i][:ells_wl_bins[0]], color=colors2[i], label=labels2[i], marker=markers2[i])
@@ -145,6 +146,6 @@ for ax in axs.flat:
 # Adjust layout to prevent overlap
 plt.tight_layout()
 plt.subplots_adjust(wspace=0, hspace=0)
-
+plt.savefig("pca_emcee_runs/Figures/Tests/PCA_components_3x2pt.png", dpi=300)
 # Display the plot
 plt.show()

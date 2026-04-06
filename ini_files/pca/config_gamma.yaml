@@ -18,31 +18,23 @@ specs:
   #'kmax' -> vary kmax in each z-bin, which technically equals to the 'lmax'-option via lmax=kmax rcom(z_mod)/(1+z_mod)
   #           with z_mod corresponding to a peak of the shear and photo-GC kernels 
   scale_cuts:
-    type: 'kmax'
+    type: 'lmax'
     max_WL: #[2000]
             #[2800, 2800, 2800, 2800, 2800, 
             #       3000, 3000, 3000, 3000, 
             #             3000, 3000, 3000, 
             #                   3000, 3000,
             #                         3000] #always a list, same length as nbin*(nbin+1)/2 or just 1 for const_lmax
-            [3., 3., 3., 2., 2.]
-    max_GC: #[1000]
-            #[478, 478, 478, 478, 478, 
-            #      617, 617, 617, 617, 
-            #           716, 716, 716, 
-            #                780, 780,
-            #                     818] #always a list, same length as nbin*(nbin+1)/2 or just 1 for const_lmax
-            #[68, 68, 68, 68, 68, 
-            #     88, 88, 88, 88, 
-            #     102, 102, 102, 
-            #     111, 111,
-            #     116] 
-            #[204, 204, 204, 204, 204, 
-            #      264, 264, 264, 264, 
-            #           306, 306, 306, 
-            #                334, 334,
-            #                     350] 
-            [0.1, 0.1, 0.1, 0.1, 0.1]
+            [3000,3000, 3000, 3000, 3000, 
+                 3000, 3000, 3000, 3000, 
+                 3000, 3000, 3000, 
+                 3000, 3000,
+                 3000]
+    max_GC: [3000,3000, 3000, 3000, 3000, 
+                 3000, 3000, 3000, 3000, 
+                 3000, 3000, 3000, 
+                 3000, 3000,
+                 3000]
     cosmo: # for transformation from k_eff to ell
       'Omega_m': 0.31
       'w0': -1.
