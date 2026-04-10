@@ -1,4 +1,4 @@
-observable: 'WL'
+observable: '3x2pt'
 #Observables 
 #     'WL' -> shear-shear
 #     'GC' -> photo-clustering
@@ -24,11 +24,11 @@ specs:
                  3000, 3000, 3000, 
                  3000, 3000,
                  3000]
-    max_GC: [20, 20, 20, 20, 20, 
-                 20, 20, 20, 20, 
-                 20, 20, 20, 
-                 20, 20,
-                 20]
+    max_GC: [136, 136, 136, 136, 136,
+            176, 176, 176, 176,
+            204, 204, 204,
+            222, 222,
+            233]
     cosmo: # for transformation from k_eff to ell
       'Omega_m': 0.31966
       'w0': -1.

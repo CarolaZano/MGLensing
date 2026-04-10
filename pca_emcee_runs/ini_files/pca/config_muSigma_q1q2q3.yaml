@@ -30,7 +30,7 @@ specs:
             222, 222,
             233]
     cosmo: # for transformation from k_eff to ell
-      'Omega_m': 0.31966
+      'Omega_m': 0.31
       'w0': -1.
       'wa': 0.
 
@@ -40,7 +40,7 @@ specs:
   #----- not implemented yet:  
   #     Custom: analytical n(z) or from file
   survey_info: 'LSST_Y1' #'Euclid_Y1' #'Euclid_5bins'
-  custom_survey_path:
+  custom_survey_path: 
 
 
 data:
@@ -52,8 +52,7 @@ data:
   #     1 -> read from a file
   data_file: 
 
-  nl_model: 6
-  #bacco_option: 'z_extrap_hmcode'
+  nl_model: 0
   #Nonlinear power spectrum
   #     0 -> HMcode
   #     1 -> bacco
@@ -87,9 +86,8 @@ data:
 
 theory:
   add_noise: False
-  nl_model: 6
-  #bacco_option: 'z_extrap_hmcode'
-  option: 'pseudo' #'linear' or 'pseudo'
+  nl_model: 10 # REACT_MUSIGMA_Q123
+  #option: 'pseudo' #'linear' or 'pseudo'
   #Nonlinear power spectrum
   #     0 -> HMcode
   #     1 -> bacco
@@ -119,10 +117,10 @@ theory:
   #     0 -> no photo-z error
   #     1 -> additive mode, n(z') = n(z + dz)
   #     2 -> multiplicative mode, n(z') = n(z(1 + dz))
-  params: ./ini_files/pca/params_model_hmcode_all_PCA.yaml   
+  params: ./ini_files/pca/params_model_hmcode_all_NLmodel.yaml   
 
 output: 
-  chain_name: fR_ReACTEmudat_nDGPGRonly_lsst_y1_pcacuts_ReACTemus_pseudo_Constrain-with-fRpseudo
+  chain_name: lsst_y1_test_muSigma_q1q2q3
 sampler: 
   mcmc:
     verbose: True
@@ -130,5 +128,5 @@ sampler:
     n_live: 1000
     pool: 20
     resume: False
-    hdf5_name: fR_ReACTEmudat_nDGPGRonly_lsst_y1_pcacuts_ReACTemus_pseudo_Constrain-with-fRpseudo
+    hdf5_name:  lsst_y1_test_muSigma_q1q2q3
     
