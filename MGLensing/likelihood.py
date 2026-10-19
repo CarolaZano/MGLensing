@@ -182,6 +182,7 @@ class MGLike:
         if status:  
             chi2 = 0.
             model_data_vector = self.compute_data_vector(param_dic_all) 
+            #print('model data vector: ', model_data_vector.shape)
             if self.Theo.flag_nan:
                 #print('detected NaNs before computing likelihood')
                 return -np.inf
@@ -196,8 +197,10 @@ class MGLike:
                 if hasattr(self.Data, 'inv_data_covariance') and self.Data.inv_data_covariance is not None:
                     chi2 = np.einsum('i, ij, j->', difference_vector, self.Data.inv_data_covariance, difference_vector)
                 else:
-                    return -np.inf  
- 
+                    return -np.inf
+
+            if not np.isfinite(chi2):
+                return -np.inf
             return -0.5*chi2    
         else:
             return -np.inf      
