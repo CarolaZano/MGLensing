@@ -122,7 +122,7 @@ theory:
   params: ./ini_files/pca/params_model_hmcode_all_PCA.yaml   
 
 output: 
-  chain_name: GR_ReACTEmudat_lsst_y1_pcacuts_ReACTemus_pseudo_fixedphotoz
+  chain_name: GR_ReACTEmudat_lsst_y1_pcacuts_ReACTemus_pseudo_muSigma_q1q2q3_216theories
 sampler: 
   mcmc:
     verbose: True
@@ -130,5 +130,5 @@ sampler:
     n_live: 1000
     pool: 20
     resume: False
-    hdf5_name: GR_ReACTEmudat_lsst_y1_pcacuts_ReACTemus_pseudo_fixedphotoz
+    hdf5_name: GR_ReACTEmudat_lsst_y1_pcacuts_ReACTemus_pseudo_muSigma_q1q2q3_216theories
     

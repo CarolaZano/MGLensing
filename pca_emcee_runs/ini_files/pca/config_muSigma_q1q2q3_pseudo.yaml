@@ -30,7 +30,7 @@ specs:
             222, 222,
             233]
     cosmo: # for transformation from k_eff to ell
-      'Omega_m': 0.31
+      'Omega_m': 0.31966
       'w0': -1.
       'wa': 0.
 
@@ -117,7 +117,7 @@ theory:
   #     0 -> no photo-z error
   #     1 -> additive mode, n(z') = n(z + dz)
   #     2 -> multiplicative mode, n(z') = n(z(1 + dz))
-  params: ./ini_files/pca/params_model_hmcode_all_NLmodel.yaml   
+  params: ./ini_files/pca/params_model_hmcode_all_PCA.yaml   
 
 output: 
   chain_name: lsst_y1_test_muSigma_q1q2q3
