@@ -11,51 +11,44 @@ import multiprocessing
 from datetime import timedelta
 
 
-
-MGL_q1q2q3_nl = MGLensing.MGL("ini_files/pca/config_muSigma_q1q2q3.yaml")
-MGL_q1q2q3_pseudo = MGLensing.MGL("ini_files/pca/config_muSigma_q1q2q3_pseudo.yaml")
-
-# find large range of q1q2q3 values
-q1_arr = np.linspace(-2,2, 6)
-q2_arr = np.linspace(-2,2, 6)
-q3_arr = np.linspace(-2,2, 6)
-
-# find all combinations of q1q2q3 values in the ranges above, and store in list
-Model_q1q2q3_values_list = [
-    (q1, q2, q3)
-    for q1 in q1_arr
-    for q2 in q2_arr
-    for q3 in q3_arr
-]
-
 # Perform PCA with numpy.linalg.svd - find rotation matrix
-def findPCA_and_explainedvariance(M_data, B_data, L_ch_inv):
+def findPCA(M_data, B_data, L_ch_inv):
     Delta = np.array(np.matmul(L_ch_inv, (B_data - M_data).T).T)
     Usvd, s, vh = np.linalg.svd(Delta.T, full_matrices=True)
     Usvd = Usvd.T
-    # Calculate explained variance, variance_i = s_i/sum(s)
-    explained_variance = s / np.sum(s)
-    return Usvd, Delta, explained_variance
+    return Usvd, Delta
 
-def get_Usvd_and_Delta(param_dic_all, Model_q1q2q3_values_list):
-    
+
+MGL_q1q2q3_nl = MGLensing.MGL("ini_files/pca/config_muSigma_q1q2q3.yaml")
+
+MGL_q1q2q3_pseudo = MGLensing.MGL("ini_files/pca/config_muSigma_q1q2q3_pseudo.yaml")
+
+# store list of q1, q2, q3 values for the 8 theories
+Model_q1q2q3_values_list = [
+    (-2.0, +0.4, +1.6),
+    (-2.0, +2.0, +0.8),
+    (-1.2, +0.8, +1.6),
+    (+0.4, +1.2, +2.0),
+    (+1.2, +0.0, +0.0),
+    (+1.2, +0.0, +1.6),
+    (+1.2, +0.4, +1.6),
+    (+1.2, +1.2, +0.8)
+]
+
+
+def get_B_and_M(param_dic_all, Model_q1q2q3_values_list):
     param_dic_list = []
     for q1q2q3 in Model_q1q2q3_values_list:
         param_dic_list.append(param_dic_all | {"q1": q1q2q3[0], "q2": q1q2q3[1], "q3": q1q2q3[2]})
-        #_, status = MGL_q1q2q3_nl.Like.Theo.check_pars(param_dic_all | {"q1": q1q2q3[0], "q2": q1q2q3[1], "q3": q1q2q3[2]})
+        _, status = MGL_q1q2q3_nl.Like.Theo.check_pars(param_dic_all | {"q1": q1q2q3[0], "q2": q1q2q3[1], "q3": q1q2q3[2]})
 
     ### COMBINE
     # 1: find C_ell for non-linear matter power spectrum
     B_data  = np.array([MGL_q1q2q3_nl.Like.compute_data_vector(param_dic) for param_dic in param_dic_list])
-    # 2: find C_ell for pseudo matter power spectrum
+    # 2: find C_ell for linear matter power spectrum
     M_data  = np.array([MGL_q1q2q3_pseudo.Like.compute_data_vector(param_dic) for param_dic in param_dic_list])
-
-    Usvd, Delta, explained_variance = findPCA_and_explainedvariance(M_data, B_data, L_ch_inv)
-
-    # keep PCs that explain more than 99.9% variance
-    pc_indices = np.where(explained_variance > 0.001)
-
-    return Usvd, Delta, explained_variance, pc_indices
+    
+    return B_data, M_data
 
 
 MGL_mu_pseudo = MGLensing.MGL("ini_files/pca/config_muSigma_pseudo_PCA.yaml")
@@ -77,22 +70,25 @@ def log_probability_function(pars):
         if status:
                 D_theory = MGL_mu_pseudo.Like.compute_data_vector(param_dic_all) 
         else:
-             return -np.inf
+                return -np.inf
 
         Diff = (D_data - D_theory)
 
         # Find Choleski scaled data vector
         Diff_ch = np.array(np.matmul(L_ch_inv, Diff.T))[0]
 
+        # 1: find C_ell for non-linear and linear matter power spectrum
+        B_data, M_data  = get_B_and_M(param_dic_all, Model_q1q2q3_values_list)
+
         # EXTRACT PCA MATRIX
         try:
-             Usvd, Delta, explained_variance, pc_indices = get_Usvd_and_Delta(param_dic_all, Model_q1q2q3_values_list)
+                Usvd, Delta = findPCA(M_data, B_data, L_ch_inv)
         except:
-             return -np.inf
-             
+                return -np.inf
+                
 
         # Cut data vector (choleski cov. matrix = I)
-        Diff_cut = np.matmul(Usvd[len(pc_indices[0]):], Diff_ch.T)
+        Diff_cut = np.matmul(Usvd[len(M_data):], Diff_ch.T)
         Likelihood = -0.5*(np.matmul(Diff_cut.T,Diff_cut))
         return Likelihood
 
@@ -121,8 +117,12 @@ def main():
     finish = time.time()
     chain_time = finish-start
 
-    np.savetxt("chains/chain_"+MGL_mu_pseudo.chain_name+".txt", np.c_[points, log_w, log_l], header=MGL_mu_pseudo.gen_output_header(), footer='log_Z = {log_z};  chain_time = {chain_time} (--> {chain_time_hms} hh:mm:ss)'.format(log_z=log_z, chain_time=chain_time, chain_time_hms=timedelta(seconds=chain_time)))
-    
+    # add to header the values of q1, q2, q3 for the 8 theories
+    q1q2q3_header = "################ q1, q2, q3 values for the 8 theories: ################\n"
+    for i, q1q2q3 in enumerate(Model_q1q2q3_values_list):
+        q1q2q3_header += "################ Theory {}: q1 = {}, q2 = {}, q3 = {}\n".format(i+1, q1q2q3[0], q1q2q3[1], q1q2q3[2])  
+    np.savetxt("chains/chain_"+MGL_mu_pseudo.chain_name+".txt", np.c_[points, log_w, log_l], header=MGL_mu_pseudo.gen_output_header() + q1q2q3_header, footer='log_Z = {log_z};  chain_time = {chain_time} (--> {chain_time_hms} hh:mm:ss)'.format(log_z=log_z, chain_time=chain_time, chain_time_hms=timedelta(seconds=chain_time)))
+
 
 if __name__ == "__main__":
     try:
