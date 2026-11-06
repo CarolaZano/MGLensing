@@ -13,12 +13,30 @@ chains/lsst/
 chains/mg/
 chains/hdf5/
 chains/bar_vs_bias/
-chains/
+chains/leonardo/
+chains/runs/
+chains/lsst/
+chains/pca_runs/
+chains/chain_lsst_y1_*
+chains/qg
 
 # Test plots
 figs/posteriors/unofficial/
 figs/other/
 figs/posteriors/ottis
+figs/
+
+# Plotting
+plotting_scripts/
+tutorials/plot_posteriors_pca.ipynb
+
+tutorials/plot_likelihood_of_pars.ipynb
+tutorials/plot_posterior_lsst_forecasts.ipynb
+tutorials/plot_posteriors_gq.ipynb
+tutorials/plot_posteriors_gq_osc.ipynb
+
+
+ MGLensing/structure/qg_interace.py
 
 # Distribution / packaging
 .Python
@@ -67,3 +85,6 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+
+
+.ipynb_checkpoints/

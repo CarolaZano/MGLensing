@@ -1,4 +1,4 @@
-observable: 'WL'
+observable: '3x2pt'
 #Observables 
 #     'WL' -> shear-shear
 #     'GC' -> photo-clustering
@@ -19,16 +19,22 @@ specs:
   #           with z_mod corresponding to a peak of the shear and photo-GC kernels 
   scale_cuts:
     type: 'lmax'
-    max_WL: [1478.5, 1478.5, 1478.5, 1478.5, 1478.5, 
-                 1478.5, 1478.5, 1478.5, 1478.5, 
-                 1478.5, 1478.5, 1478.5, 
-                 1478.5, 1478.5,
-                 1478.5]
-    max_GC: [20, 20, 20, 20, 20, 
-                 20, 20, 20, 20, 
-                 20, 20, 20, 
-                 20, 20,
-                 20]
+    max_WL: #[2000]
+            #[2800, 2800, 2800, 2800, 2800, 
+            #       3000, 3000, 3000, 3000, 
+            #             3000, 3000, 3000, 
+            #                   3000, 3000,
+            #                         3000] #always a list, same length as nbin*(nbin+1)/2 or just 1 for const_lmax
+            [3000,3000, 3000, 3000, 3000, 
+                 3000, 3000, 3000, 3000, 
+                 3000, 3000, 3000, 
+                 3000, 3000,
+                 3000]
+    max_GC: [3000,3000, 3000, 3000, 3000, 
+                 3000, 3000, 3000, 3000, 
+                 3000, 3000, 3000, 
+                 3000, 3000,
+                 3000]
     cosmo: # for transformation from k_eff to ell
       'Omega_m': 0.31
       'w0': -1.

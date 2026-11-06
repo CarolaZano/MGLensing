@@ -1,5 +1,4 @@
 import numpy as np
-import pyccl as ccl
 import MGrowth as mg
 from scipy.integrate import simpson, trapezoid, quad
 from scipy import interpolate as itp
@@ -13,7 +12,10 @@ from .structure.react_ide_interface import DarkScatteringReACT
 from .structure.react_fr_interface import FofRReACT
 from .structure.emantis_fr_interface import FofReMANTIS
 from .structure.ndgpemu_interface import NDGPEmu
-from .structure.mgrowth_mu_zk import MGrowthMuKZ
+from .structure.react_musigma_zk_interface import MuKZReACT
+from .structure.react_musigma_q123_interface import MuSigmaQ123ReACT
+from .structure.mgrowth_muspline import MuSigmaSpline
+from .structure.qg_interace import QuantumGravity
 
 from math import sqrt, log, exp, pow, log10
 import os
@@ -41,8 +43,10 @@ NL_MODEL_DS = 5
 NL_MODEL_FOFR = 6
 NL_MODEL_FOFR_EMANTIS = 7
 NL_MODEL_NDGP_EMU = 8
-NL_MODEL_MGROWTH = 9
-
+NL_MODEL_MUKZ = 9
+NL_MODEL_MUQ123 = 10
+NL_MODEL_MUSPLINE = 11
+NL_MODEL_QG= 12
 
 NO_BARYONS = 0
 BARYONS_HMCODE = 1
@@ -57,8 +61,7 @@ BIAS_B1B2 = 1
 BIAS_HEFT = 2
 BIAS_HEFT_PNL = 3
 BIAS_HEFT_PNL_BAR = 4
-BIAS_LIN_SIGMA8 = 5
-BIAS_HEFT_SIGMA8 = 6
+
 
 PHOTOZ_NONE = 0
 PHOTOZ_ADD = 1
@@ -175,7 +178,10 @@ class Theory:
             NL_MODEL_FOFR: FofRReACT,
             NL_MODEL_FOFR_EMANTIS: FofReMANTIS,
             NL_MODEL_NDGP_EMU: NDGPEmu,
-            NL_MODEL_MGROWTH: MGrowthMuKZ
+            NL_MODEL_MUKZ: MuKZReACT,
+            NL_MODEL_MUQ123: MuSigmaQ123ReACT,
+            NL_MODEL_MUSPLINE: MuSigmaSpline,
+            NL_MODEL_QG: QuantumGravity
         }
         print('model["nl_model"] = ', model['nl_model'])
         try:
@@ -189,10 +195,10 @@ class Theory:
         except KeyError:
             raise ValueError("Invalid nl_model option.")
         check_zmax(self.Survey.zmax, self.StructureEmu)
-        if (model['nl_model'] == NL_MODEL_FOFR) or (model['nl_model'] == NL_MODEL_FOFR_EMANTIS) or (model['nl_model'] == NL_MODEL_MGROWTH):
-            self.flag_fofr = True
+        if (model['nl_model'] == NL_MODEL_FOFR) or (model['nl_model'] == NL_MODEL_FOFR_EMANTIS) or (model['nl_model'] == NL_MODEL_MUKZ):
+            self.flag_scale_dependence = True
         else:
-            self.flag_fofr = False   
+            self.flag_scale_dependence = False   
 
         # check for Sigma, modification of the lensing potential 
         if hasattr(self.StructureEmu, 'sigma_lensing') and callable(getattr(self.StructureEmu, 'sigma_lensing')):
@@ -203,7 +209,7 @@ class Theory:
         #if 'add_noise' in model and not model['add_noise']:
         #    self.Survey.noise['LL'] = 0.
         #    self.Survey.noise['GG'] = 0.
-
+        self.flag_qg = (model['nl_model'] == NL_MODEL_QG)
         self.flag_nan = False
         # assign baryonic prescription
         baryon_models = {
@@ -224,11 +230,6 @@ class Theory:
         if self.flag_cross_sqrt_bar_boost and (model['bias_model'] == BIAS_HEFT_PNL_BAR):
             print('WARNING: cross-sqrt-bar boost and HEFT PNL BAR bias model are applied simultaneously!')    
 
-        if 'ccl_model' in model:
-            self.flag_ccl_for_cls = (model['ccl_model'] == True)
-            print('Using CCL to compute the Cells')
-        else:
-            self.flag_ccl_for_cls = False
 
         # assign intrinsic alignment     
         ia_models = {
@@ -257,20 +258,16 @@ class Theory:
             print('A hybrid model HEFT+PnlxS is applied!')
         self.flag_heft_pnl = (model['bias_model'] == BIAS_HEFT_PNL)
         self.flag_extrap_k_const = model['heft_extrap_k_const'] if 'heft_extrap_k_const' in model else False
-        self.flag_sample_blinsigma8 = (model['bias_model'] == BIAS_LIN_SIGMA8)
-        self.flag_sample_bheftsigma8 = (model['bias_model'] == BIAS_HEFT_SIGMA8)
         bias_models = {
             BIAS_LIN: (self.get_pgm_lin_bias, self.get_pgg_lin_bias),
             BIAS_B1B2: (self.get_pgm_quadr_bias, self.get_pgg_quadr_bias),
             BIAS_HEFT: (self.get_pgm_heft_bias, self.get_pgg_heft_bias),
             BIAS_HEFT_PNL: (self.get_pgm_heft_bias_pnl, self.get_pgg_heft_bias_pnl),
             BIAS_HEFT_PNL_BAR: (self.get_pgm_heft_bias_pnl, self.get_pgg_heft_bias_pnl),
-            BIAS_LIN_SIGMA8: (self.get_pgm_lin_bias, self.get_pgg_lin_bias),
-            BIAS_HEFT_SIGMA8: (self.get_pgm_heft_bias, self.get_pgg_heft_bias)
         }
         try:
             self.get_pgm, self.get_pgg = bias_models[model['bias_model']]
-            if self.flag_heft or self.flag_sample_bheftsigma8:
+            if self.flag_heft:
                 self.BaccoEmuClass = BaccoEmu()
         except KeyError:
             raise ValueError("Invalid bias_model option.")
@@ -291,6 +288,7 @@ class Theory:
         """
         Computes the terms of the Intrinsic Alignment (IA) TATT model at 1-loop order.
         For reference on the equations, see https://arxiv.org/pdf/1708.09247.
+        Adapted from CLOE.
 
         Parameters:
         ----------
@@ -554,13 +552,23 @@ class Theory:
         omega_m = params_dic['Omega_m']
         w0 = params_dic['w0']
         wa = params_dic['wa']
-        omega_lambda_func = lambda z: (1.-omega_m) * pow(1.+z, 3.*(1.+w0+wa)) * np.exp(-3.*wa*z/(1.+z))
-        e_z_func = lambda z: np.sqrt(omega_m*pow(1.+z, 3) + omega_lambda_func(z))
-        r_z_int = lambda z: 1./e_z_func(z)
-        r_z_func = lambda z_in: quad(r_z_int, 0, z_in)[0]
-        r_z_grid = np.array([r_z_func(zz_i) for zz_i in self.Survey.zz_integr])/H0_h_c 
-        e_z_grid = np.array([e_z_func(zz_i) for zz_i in self.Survey.zz_integr])
-        k_grid =(self.Survey.ell[:,None]+0.5)/r_z_grid
+        zz = self.Survey.zz_integr
+        if self.flag_qg:
+            self.StructureEmu.get_interpolators(params_dic)
+            e_z_grid = np.array([self.StructureEmu.E_interp(zz_i) for zz_i in zz]) 
+            r_z_grid = np.array([self.StructureEmu.rcom_interp(zz_i) for zz_i in zz]) / H0_h_c
+            k_grid =(self.Survey.ell[:,None]+0.5)/r_z_grid
+        else:
+            omega_lambda_func = lambda z: (1.-omega_m) * pow(1.+z, 3.*(1.+w0+wa)) * np.exp(-3.*wa*z/(1.+z))
+            e_z_func = lambda z: np.sqrt(omega_m*pow(1.+z, 3) + omega_lambda_func(z))
+            r_z_int = lambda z: 1./e_z_func(z)
+            r_z_grid = np.zeros(len(zz), dtype=np.float64)
+            r_z_grid[0] = quad(r_z_int, 0, zz[0])[0]
+            for i in range(1, len(zz)):
+                r_z_grid[i] = r_z_grid[i-1] + quad(r_z_int, zz[i-1], zz[i])[0]
+            r_z_grid = r_z_grid / H0_h_c
+            e_z_grid = np.array([e_z_func(zz_i) for zz_i in zz])
+            k_grid =(self.Survey.ell[:,None]+0.5)/r_z_grid
         return e_z_grid, r_z_grid, k_grid
     
     def get_add_photoz_error(self, nz, deltaz, nbin):
@@ -644,7 +652,7 @@ class Theory:
         """
         omega_m = params['Omega_m']
         # dz is normalise at z=0
-        dz = self.dz if self.flag_fofr else self.dz[None,:] 
+        dz = self.dz if self.flag_scale_dependence else self.dz[None,:] 
         a1_ia = params['a1_IA']
         a2_ia = params['a2_IA']
         b1_ia = params['b1_IA']
@@ -676,7 +684,7 @@ class Theory:
             Power spectrum for the intrinsic alignment-intrinsic alignment.
         """
         c1, c1d, c2 = self.get_tatt_parameters(params_dic)
-        dz = self.dz if self.flag_fofr else self.dz[None,:] 
+        dz = self.dz if self.flag_scale_dependence else self.dz[None,:] 
         # growth factor can be scale-dependent for f(R) in the future potentially
         # fpt terms are computed at redshift 0
         fpt_terms = self.get_fpt_terms(self.StructureEmu.pklin_z0)
@@ -742,7 +750,7 @@ class Theory:
         f_ia = ((1. + self.Survey.zz_integr) / (1. + PIVOT_REDSHIFT))**eta_ia * (self.Survey.lum_func(self.Survey.zz_integr))**beta_ia
         # dz (ell, zz_inegr) must be normalise to unity at z=0 to cancel the linear growth of the density field 
         # and yield a constant amplitude in the primordial alignment scenario
-        dz = self.dz if self.flag_fofr else self.dz[None,:] 
+        dz = self.dz if self.flag_scale_dependence else self.dz[None,:] 
         # growth factor can be scale-dependent for f(R) in the future potentially
         # dimensions of is power spectra: (ell, zz_integr)
         self.factor_nla = - a_ia*C_IA*omega_m*f_ia[None,:]/dz
@@ -780,8 +788,6 @@ class Theory:
             where num_bins is the number of redshift bins.
         """
         omega_m = params_dic['Omega_m']
-        # can be later changed 
-        #deltas = np.array([params_dic['deltaz_'+str(i+1)] for i in range(self.Survey.nbin)])
         eta_z_s =  self.get_n_of_z(self.Survey.eta_z_s, self.deltaz_s, self.Survey.nbin_s)
         
         # in the integrand dimensions are (bin_i, zz_integr, zz_integr)
@@ -793,7 +799,7 @@ class Theory:
         # add modification of the lensing potential
         # must have the same dimension (ell, zz_integr, n_bin) or be 1
         # specified in StructureEmu, can be scale-dependent
-        w_gamma *= self.Sigma(params_dic, self.k, self.Survey.lbin, self.Survey.zz_integr)
+        w_gamma = w_gamma * self.Sigma(params_dic, self.k, self.Survey.lbin, self.Survey.zz_integr)
         
         return w_gamma
     
@@ -857,46 +863,14 @@ class Theory:
         #W_L = self.w_gamma + self.factor_nla[:, :, None] *self.w_ia # ell, zz_integr, bin_i
         #cl_ll_int = W_L[:,:,:,None] * W_L[:,:,None,:] * self.pmm[:, :, None, None] / self.ez[None,:,None,None] / self.rz[None,:,None,None] / self.rz[None,:,None,None] / H0_h_c
         # integrate along the z_integr-direction
-        cl_ll = trapezoid(cl_ll_int, self.Survey.zz_integr, axis=1)[:self.Survey.nell_wl, :, :]  # simpson(cl_ll_int, self.Survey.zz_integr, axis=1)[:self.Survey.nell_wl, :, :]
+        cl_ll = simpson(cl_ll_int, self.Survey.zz_integr, axis=1)[:self.Survey.nell_wl, :, :] #trapezoid(cl_ll_int, self.Survey.zz_integr, axis=1)[:self.Survey.nell_wl, :, :]
         # add noise to the auto-correlated bins
         for i in range(self.Survey.nbin_s):
             cl_ll[:, i, i] += self.Survey.noise['LL']
         return cl_ll
     
 
-    def get_cell_shear_CCL(self, params_dic):
-        bemu_nl = ccl.BaccoemuNonlinear()
-        cosmo_nl = ccl.Cosmology(
-            Omega_c=params_dic['Omega_c'],
-            Omega_b=params_dic['Omega_b'],
-            h=params_dic['h'],
-            n_s=params_dic['ns'],
-            sigma8=params_dic['sigma8_cb'],
-            m_nu=params_dic['Mnu'],
-            w0=params_dic['w0'],
-            wa=params_dic['wa'],
-            Omega_k=0.,
-            T_ncdm=0,
-            transfer_function='boltzmann_camb',
-            matter_power_spectrum=bemu_nl
-        )
-        bias_ia = params_dic['a1_IA'] * (1. + self.Survey.zz_integr) ** params_dic['eta1_IA'] * 0.0134 / 0.01387684609
-        nbin = self.Survey.nbin_s
-        n_ell = len(self.Survey.ell)
-        cl_ll = np.zeros((n_ell, nbin, nbin))
-
-        for i in range(nbin):
-            t_l_i = ccl.WeakLensingTracer(cosmo_nl, dndz=(self.Survey.zz_integr, self.Survey.eta_z_s[:, i]),
-                                            ia_bias=(self.Survey.zz_integr, bias_ia))
-            for j in range(nbin):
-                t_l_j = ccl.WeakLensingTracer(cosmo_nl, dndz=(self.Survey.zz_integr, self.Survey.eta_z_s[:, j]),
-                                                ia_bias=(self.Survey.zz_integr, bias_ia))
-                cl_ll[:, i, j] = ccl.angular_cl(cosmo_nl, t_l_i, t_l_j, self.Survey.l_wl)
-
-        for i in range(nbin):
-            cl_ll[:, i, i] += self.Survey.noise['LL']
-        return cl_ll
-
+    
 
     def get_pmm(self, params_dic):
         """Calculate the matter-matter power spectrum (P_mm) with optional baryonic corrections.
@@ -1018,7 +992,7 @@ class Theory:
             The galaxy-galaxy power spectrum.
         """
         pgg = self.BaccoEmuClass.get_heft_pgg_zextr_lin(params_dic, self.k, self.Survey.lbin, self.Survey.zz_integr, self.Survey.nbin_l, 
-                                                        self.flag_sample_bheftsigma8, self.flag_extrap_k_const)
+                                                        self.flag_extrap_k_const)
         # return dimension (lbin, z_integr, bin_i, bin_j)
         return pgg
     
@@ -1037,7 +1011,7 @@ class Theory:
             The galaxy-galaxy power spectrum.
         """
         pgg = self.BaccoEmuClass.get_heft_nl_pgg_zextr_lin(params_dic, self.k, self.Survey.lbin, self.Survey.zz_integr, self.Survey.nbin_l, 
-                                                           self.flag_heft_pnl_bar, self.flag_sample_bheftsigma8, self.flag_extrap_k_const)
+                                                           self.flag_heft_pnl_bar, self.flag_extrap_k_const)
         # return dimension (lbin, z_integr, bin_i, bin_j)
         return pgg
     
@@ -1056,7 +1030,7 @@ class Theory:
             The matter-galaxy power spectrum.
         """
         pgm = self.BaccoEmuClass.get_heft_pgm_zextr_lin(params_dic, self.k, self.Survey.lbin, self.Survey.zz_integr, self.Survey.nbin_l,
-                                                        self.flag_sample_bheftsigma8, self.flag_extrap_k_const)
+                                                        self.flag_extrap_k_const)
         # return dimension (lbin, z_integr, bin_i)
         return pgm
     
@@ -1075,7 +1049,7 @@ class Theory:
             The matter-galaxy power spectrum.
         """
         pgm = self.BaccoEmuClass.get_heft_nl_pgm_zextr_lin(params_dic, self.k, self.Survey.lbin, self.Survey.zz_integr, self.Survey.nbin_l, 
-                                                           self.flag_heft_pnl_bar, self.flag_sample_bheftsigma8, self.flag_extrap_k_const)
+                                                           self.flag_heft_pnl_bar, self.flag_extrap_k_const)
         # return dimension (lbin, z_integr, bin_i)
         return pgm
         
@@ -1133,72 +1107,6 @@ class Theory:
             cl_gg[:, i, i] += self.Survey.noise['GG']
         return cl_gg 
     
-
-    def get_cell_galclust_CCL(self, params_dic):
-        bemu_nl = ccl.BaccoemuNonlinear()
-        cosmo_nl = ccl.Cosmology(
-            Omega_c=params_dic['Omega_c'],
-            Omega_b=params_dic['Omega_b'],
-            h=params_dic['h'],
-            n_s=params_dic['ns'],
-            sigma8=params_dic['sigma8_cb'],
-            m_nu=params_dic['Mnu'],
-            w0=params_dic['w0'],
-            wa=params_dic['wa'],
-            Omega_k=0.,
-            T_ncdm=0,
-            transfer_function='boltzmann_camb',
-            matter_power_spectrum=bemu_nl
-        )
-        nbin = self.Survey.nbin_l
-        n_ell = len(self.Survey.ell)
-        cl_gg = np.zeros((n_ell, nbin, nbin))
-
-        if self.flag_blinear:
-            b1_arr = np.array([params_dic[f'b1_{i+1}'] for i in range(nbin)])
-            for i in range(nbin):
-                bias_g_i = np.ones_like(self.Survey.zz_integr) * b1_arr[i]
-                t_g_i = ccl.NumberCountsTracer(cosmo_nl, has_rsd=False, dndz=(self.Survey.zz_integr, self.Survey.eta_z_l[:, i]), 
-                                               bias=(self.Survey.zz_integr, bias_g_i), mag_bias=None)
-                for j in range(nbin):
-                    bias_g_j = np.ones_like(self.Survey.zz_integr) * b1_arr[j]
-                    t_g_j = ccl.NumberCountsTracer(cosmo_nl, has_rsd=False, dndz=(self.Survey.zz_integr, self.Survey.eta_z_l[:, j]),
-                                                   bias=(self.Survey.zz_integr, bias_g_j), mag_bias=None)
-                    cl_gg[:, i, j] = ccl.angular_cl(cosmo_nl, t_g_i, t_g_j, self.Survey.l_gc)
-
-        elif self.flag_heft_original:
-            min_k = np.log10(2.e-4 * params_dic['h'])
-            max_k = np.log10(0.7 * params_dic['h'])
-            heft = ccl.nl_pt.BaccoLbiasCalculator(cosmo=cosmo_nl, log10k_min=min_k, log10k_max=max_k, nk_per_decade=20)
-            heft.update_ingredients(cosmo_nl)
-            b1L = np.array([params_dic[f'b1L_{i+1}'] + 1 for i in range(nbin)])
-            b2L = np.array([params_dic[f'b2L_{i+1}'] * 2 for i in range(nbin)])
-            bs2 = np.array([params_dic[f'bs2L_{i+1}'] * 2 for i in range(nbin)])
-            bLap = np.array([params_dic[f'blaplL_{i+1}'] * 2 for i in range(nbin)])
-            pk_gg = [[None for _ in range(nbin)] for _ in range(nbin)]
-            for i in range(nbin):
-                for j in range(nbin):
-                    ptt_g_i = ccl.nl_pt.PTNumberCountsTracer(b1=(self.Survey.zz_integr, b1L[i] * np.ones(len(self.Survey.zz_integr))), b2=(self.Survey.zz_integr, b2L[i] * np.ones(len(self.Survey.zz_integr))),
-                                                             bs=(self.Survey.zz_integr, bs2[i] * np.ones(len(self.Survey.zz_integr))), bk2=(self.Survey.zz_integr, bLap[i] * np.ones(len(self.Survey.zz_integr))))
-                    ptt_g_j = ccl.nl_pt.PTNumberCountsTracer(b1=(self.Survey.zz_integr, b1L[j] * np.ones(len(self.Survey.zz_integr))), b2=(self.Survey.zz_integr, b2L[j] * np.ones(len(self.Survey.zz_integr))),
-                                                             bs=(self.Survey.zz_integr, bs2[j] * np.ones(len(self.Survey.zz_integr))), bk2=(self.Survey.zz_integr, bLap[j] * np.ones(len(self.Survey.zz_integr))))
-                    pk_gg[i][j] = heft.get_biased_pk2d(tracer1=ptt_g_i, tracer2=ptt_g_j)
-            bias_g = np.ones_like(self.Survey.zz_integr)
-            for i in range(nbin):
-                t_g_i = ccl.NumberCountsTracer(cosmo_nl, has_rsd=False, dndz=(self.Survey.zz_integr, self.Survey.eta_z_l[:, i]),
-                                               bias=(self.Survey.zz_integr, bias_g), mag_bias=None)
-                for j in range(nbin):
-                    t_g_j = ccl.NumberCountsTracer(cosmo_nl, has_rsd=False, dndz=(self.Survey.zz_integr, self.Survey.eta_z_l[:, j]),
-                                                   bias=(self.Survey.zz_integr, bias_g), mag_bias=None)
-                    cl_gg[:, i, j] = ccl.angular_cl(cosmo_nl, t_g_i, t_g_j, self.Survey.l_gc, p_of_k_a=pk_gg[i][j])
-
-        else:
-            raise KeyError('CCL implementation currently supports only linear and HEFT bias models.')
-
-        # Add noise to the diagonal
-        for i in range(nbin):
-            cl_gg[:, i, i] += self.Survey.noise['GG']
-        return cl_gg
 
 
     def get_pk_cross_nla(self, params_dic):
@@ -1291,130 +1199,7 @@ class Theory:
         cl_gl = np.transpose(cl_lg, (0, 2, 1))  
         return cl_lg, cl_gl
     
-    def get_cell_cross_CCL(self, params_dic):
-        bemu_nl = ccl.BaccoemuNonlinear()
-        cosmo_nl = ccl.Cosmology(
-            Omega_c=params_dic['Omega_c'],
-            Omega_b=params_dic['Omega_b'],
-            h=params_dic['h'],
-            n_s=params_dic['ns'],
-            sigma8=params_dic['sigma8_cb'],
-            m_nu=params_dic['Mnu'],
-            w0=params_dic['w0'],
-            wa=params_dic['wa'],
-            Omega_k=0.,
-            T_ncdm=0,
-            transfer_function='boltzmann_camb',
-            matter_power_spectrum=bemu_nl
-        )
-        bias_ia = params_dic['a1_IA'] * (1. + self.Survey.zz_integr) ** params_dic['eta1_IA'] * 0.0134 / 0.01387684609
-        nbin_s = self.Survey.nbin_s
-        nbin_l = self.Survey.nbin_l
-        n_ell = len(self.Survey.ell)
-        cl_ll = np.zeros((n_ell, nbin_s, nbin_s))
-        cl_gg = np.zeros((n_ell, nbin_l, nbin_l))
-        cl_lg = np.zeros((n_ell, nbin_s, nbin_l))
-        cl_gl = np.zeros((n_ell, nbin_l, nbin_s))
-
-        if self.flag_blinear:
-            b1_arr = np.array([params_dic[f'b1_{i+1}'] for i in range(nbin_l)])
-            for i in range(nbin_l):
-                bias_g_i = np.ones_like(self.Survey.zz_integr) * b1_arr[i]
-                t_g_i = ccl.NumberCountsTracer(cosmo_nl, has_rsd=False, dndz=(self.Survey.zz_integr, self.Survey.eta_z_l[:, i]), 
-                                               bias=(self.Survey.zz_integr, bias_g_i), mag_bias=None)
-                for j in range(nbin_l):
-                    bias_g_j = np.ones_like(self.Survey.zz_integr) * b1_arr[j]
-                    t_g_j = ccl.NumberCountsTracer(cosmo_nl, has_rsd=False, dndz=(self.Survey.zz_integr, self.Survey.eta_z_l[:, j]),
-                                                   bias=(self.Survey.zz_integr, bias_g_j), mag_bias=None)
-                    cl_gg[:, i, j] = ccl.angular_cl(cosmo_nl, t_g_i, t_g_j, self.Survey.l_gc)
-                for k in range(nbin_s):
-                    t_l_k = ccl.WeakLensingTracer(cosmo_nl, dndz=(self.Survey.zz_integr, self.Survey.eta_z_s[:, k]),
-                                                  ia_bias=(self.Survey.zz_integr, bias_ia))
-                    cl_gl[:, i, k] = ccl.angular_cl(cosmo_nl, t_g_i, t_l_k, self.Survey.l_xc)
-            
-            for i in range(nbin_s):    
-                t_l_i = ccl.WeakLensingTracer(cosmo_nl, dndz=(self.Survey.zz_integr, self.Survey.eta_z_s[:, i]),
-                                              ia_bias=(self.Survey.zz_integr, bias_ia))
-                for j in range(nbin_s):   
-                    t_l_j = ccl.WeakLensingTracer(cosmo_nl, dndz=(self.Survey.zz_integr, self.Survey.eta_z_s[:, j]),
-                                                  ia_bias=(self.Survey.zz_integr, bias_ia))
-                    cl_ll[:, i, j] = ccl.angular_cl(cosmo_nl, t_l_i, t_l_j, self.Survey.l_wl)
-                for k in range(nbin_l):
-                    bias_g_k = np.ones_like(self.Survey.zz_integr) * b1_arr[k]
-                    t_g_k = ccl.NumberCountsTracer(cosmo_nl, has_rsd=False, dndz=(self.Survey.zz_integr, self.Survey.eta_z_l[:, k]),
-                                                   bias=(self.Survey.zz_integr, bias_g_k), mag_bias=None)
-                    cl_lg[:, i, k] = ccl.angular_cl(cosmo_nl, t_l_i, t_g_k, self.Survey.l_xc)
-
-
-        elif self.flag_heft_original:
-            min_k = np.log10(2.e-4 * params_dic['h'])
-            max_k = np.log10(0.7 * params_dic['h'])
-            heft = ccl.nl_pt.BaccoLbiasCalculator(
-                cosmo=cosmo_nl, log10k_min=min_k, log10k_max=max_k, nk_per_decade=20
-            )
-            heft.update_ingredients(cosmo_nl)
-            b1L = np.array([params_dic[f'b1L_{i+1}'] + 1 for i in range(nbin_l)])
-            b2L = np.array([params_dic[f'b2L_{i+1}'] * 2 for i in range(nbin_l)])
-            bs2 = np.array([params_dic[f'bs2L_{i+1}'] * 2 for i in range(nbin_l)])
-            bLap = np.array([params_dic[f'blaplL_{i+1}'] * 2 for i in range(nbin_l)])
-            pk_gg = [[None for _ in range(nbin_l)] for _ in range(nbin_l)]
-            #pk_lg = [[None for _ in range(nbin_s)] for _ in range(nbin_l)]
-            pk_gl = [[None for _ in range(nbin_l)] for _ in range(nbin_s)]
-            for i in range(nbin_l):
-                #ptt_l_i = ccl.nl_pt.PTMatterTracer()
-                ptt_g_i = ccl.nl_pt.PTNumberCountsTracer(b1=(self.Survey.zz_integr, b1L[i] * np.ones(len(self.Survey.zz_integr))), b2=(self.Survey.zz_integr, b2L[i] * np.ones(len(self.Survey.zz_integr))),
-                                            bs=(self.Survey.zz_integr, bs2[i] * np.ones(len(self.Survey.zz_integr))), bk2=(self.Survey.zz_integr, bLap[i] * np.ones(len(self.Survey.zz_integr))))
-                for j in range(nbin_l):
-                    ptt_g_j = ccl.nl_pt.PTNumberCountsTracer(b1=(self.Survey.zz_integr, b1L[j] * np.ones(len(self.Survey.zz_integr))), b2=(self.Survey.zz_integr, b2L[j] * np.ones(len(self.Survey.zz_integr))),
-                                                             bs=(self.Survey.zz_integr, bs2[j] * np.ones(len(self.Survey.zz_integr))), bk2=(self.Survey.zz_integr, bLap[j] * np.ones(len(self.Survey.zz_integr))))
-                    pk_gg[i][j] = heft.get_biased_pk2d(tracer1=ptt_g_i, tracer2=ptt_g_j)
-                for k in range(nbin_s):
-                    ptt_l_k = ccl.nl_pt.PTMatterTracer()
-                    #pk_lg[i][j] = heft.get_biased_pk2d(tracer1=ptt_l_i, tracer2=ptt_g_j)
-                    pk_gl[i][j] = heft.get_biased_pk2d(tracer1=ptt_g_i, tracer2=ptt_l_k)
-            bias_g = np.ones_like(self.Survey.zz_integr)
-            for i in range(nbin_l):
-                t_g_i = ccl.NumberCountsTracer(cosmo_nl, has_rsd=False, dndz=(self.Survey.zz_integr, self.Survey.eta_z_l[:, i]),
-                                                bias=(self.Survey.zz_integr, bias_g), mag_bias=None)
-                for j in range(nbin_l):
-                    t_g_j = ccl.NumberCountsTracer(cosmo_nl, has_rsd=False, dndz=(self.Survey.zz_integr, self.Survey.eta_z_l[:, j]),
-                                                   bias=(self.Survey.zz_integr, bias_g), mag_bias=None)
-                    cl_gg[:, i, j] = ccl.angular_cl(cosmo_nl, t_g_i, t_g_j, self.Survey.l_gc, p_of_k_a=pk_gg[i][j])
-                for k in range(nbin_s): 
-                    t_l_k = ccl.WeakLensingTracer(
-                        cosmo_nl,
-                        dndz=(self.Survey.zz_integr, self.Survey.eta_z_s[:, k]),
-                        ia_bias=(self.Survey.zz_integr, bias_ia)
-                    )   
-                    cl_gl[:, i, k] = ccl.angular_cl(cosmo_nl, t_g_i, t_l_k, self.Survey.l_xc, p_of_k_a=pk_gl[i][k])
-                
-                
-            for i in range(nbin_s):    
-                t_l_i = ccl.WeakLensingTracer(cosmo_nl, dndz=(self.Survey.zz_integr, self.Survey.eta_z_s[:, i]),
-                                               ia_bias=(self.Survey.zz_integr, bias_ia))
-                for j in range(nbin_s):
-                    t_l_j = ccl.WeakLensingTracer(
-                        cosmo_nl,
-                        dndz=(self.Survey.zz_integr, self.Survey.eta_z_s[:, j]),
-                        ia_bias=(self.Survey.zz_integr, bias_ia)
-                    )
-                    cl_ll[:, i, j] = ccl.angular_cl(cosmo_nl, t_l_i, t_l_j, self.Survey.l_wl)
-                
-                for k in range(nbin_l):
-                    t_g_k = ccl.NumberCountsTracer(cosmo_nl, has_rsd=False, dndz=(self.Survey.zz_integr, self.Survey.eta_z_l[:, k]),
-                                                   bias=(self.Survey.zz_integr, bias_g), mag_bias=None)
-                    cl_lg[:, i, k] = ccl.angular_cl(cosmo_nl, t_l_i, t_g_k, self.Survey.l_xc, p_of_k_a=pk_gl[k][i])
-
-
-        else:
-            raise KeyError('CCL implementation currently supports only linear and HEFT bias models.')
-
-        # Add noise to the diagonal
-        for i in range(nbin_s):
-            cl_ll[:, i, i] += self.Survey.noise['LL']
-        for i in range(nbin_l):    
-            cl_gg[:, i, i] += self.Survey.noise['GG']
-        return cl_ll, cl_gg, cl_lg, cl_gl
+    
 
     def compute_shear(self, params_dic):
         """Compute the shear power spectrum given a set of cosmological parameters.
@@ -1433,7 +1218,7 @@ class Theory:
         # compute background
         self.ez, self.rz, self.k = self.get_ez_rz_k(params_dic)
         # compute normalized growth factor, of size (z_integr)
-        self.dz, _ = self.StructureEmu.get_growth_binned(params_dic, self.k, self.Survey.lbin, self.Survey.zz_integr) if self.flag_fofr else self.StructureEmu.get_growth(params_dic, self.Survey.zz_integr)
+        self.dz, _ = self.StructureEmu.get_growth_binned(params_dic, self.k, self.Survey.lbin, self.Survey.zz_integr) if self.flag_scale_dependence else self.StructureEmu.get_growth(params_dic, self.Survey.zz_integr)
         # get redshift uncertainties
         self.deltaz_s, self.deltaz_l = self.get_deltaz(params_dic)
         # compute matter-matter power spectrum
@@ -1444,10 +1229,8 @@ class Theory:
         self.w_ia = self.get_ia_kernel(params_dic) 
         # compute intrinsinc alignment components of the integrand
         self.pk_delta_ia, self.pk_iaia = self.get_pk_ia(params_dic)
-        if self.flag_ccl_for_cls:
-            return self.get_cell_shear_CCL(params_dic)
-        else:
-            return self.get_cell_shear()
+
+        return self.get_cell_shear()
     
 
     def compute_galclust(self, params_dic):
@@ -1467,15 +1250,13 @@ class Theory:
         # compute background
         self.ez, self.rz, self.k = self.get_ez_rz_k(params_dic)
         # compute growth factor
-        self.dz, _ = self.StructureEmu.get_growth_binned(params_dic, self.k, self.Survey.lbin, self.Survey.zz_integr) if self.flag_fofr else self.StructureEmu.get_growth(params_dic, self.Survey.zz_integr)
+        self.dz, _ = self.StructureEmu.get_growth_binned(params_dic, self.k, self.Survey.lbin, self.Survey.zz_integr) if self.flag_scale_dependence else self.StructureEmu.get_growth(params_dic, self.Survey.zz_integr)
         # get redshift uncertainties
         self.deltaz_s, self.deltaz_l = self.get_deltaz(params_dic)
         if self.flag_heft:
             self.pgg = self.get_pgg(params_dic)
         else:    
             self.pmm, _ = self.get_pmm(params_dic)  
-            if self.flag_sample_blinsigma8:
-                self.pmm /= params_dic['sigma8_cb']**2
             self.pgg = self.get_pgg(params_dic)
         # for heft check that no NaN-values are present due to negative values in b2
         self.flag_nan = False
@@ -1483,13 +1264,10 @@ class Theory:
             #print('WARNING: NaN-values in pgg for bias parameters: ', {k: v for k, v in params_dic.items() if k.startswith('b')})
             self.flag_nan = True
         self.w_g = self.get_gg_kernel(params_dic)
-        if self.flag_ccl_for_cls:
-            return self.get_cell_galclust_CCL(params_dic)
-        else:
             # compute photometric galaxy clustring angular power spectra cl_gg(l, bin_i, bin_j)
-            # window function w_g(l,z,bin) in units of h/Mpc
-            cl_gg = self.get_cell_galclust()    
-            return cl_gg
+        # window function w_g(l,z,bin) in units of h/Mpc
+        cl_gg = self.get_cell_galclust()    
+        return cl_gg
 
     def compute_3x2pt(self, params_dic):
         """
@@ -1516,7 +1294,7 @@ class Theory:
         # compute background
         self.ez, self.rz, self.k = self.get_ez_rz_k(params_dic)
         # compute growth factor
-        self.dz, _ = self.StructureEmu.get_growth_binned(params_dic, self.k, self.Survey.lbin, self.Survey.zz_integr) if self.flag_fofr else self.StructureEmu.get_growth(params_dic, self.Survey.zz_integr)
+        self.dz, _ = self.StructureEmu.get_growth_binned(params_dic, self.k, self.Survey.lbin, self.Survey.zz_integr) if self.flag_scale_dependence else self.StructureEmu.get_growth(params_dic, self.Survey.zz_integr)
         # get redshift uncertainties
         self.deltaz_s, self.deltaz_l = self.get_deltaz(params_dic)
         # compute matter-matter power spectrum
@@ -1547,21 +1325,82 @@ class Theory:
         # window function w_g(l,z,bin) in units of h/Mpc
         cl_gg = self.get_cell_galclust()    
         # compute cross-correlated or galaxy-galaxy lensing angular power spectra cl_lg(l, bin_i, bin_j) and cl_gl(l, bin_i, bin_j)
-        if self.flag_ccl_for_cls:
-            cl_lg, cl_gl = self.get_cell_cross_CCL(params_dic)
-        else:
-            cl_lg, cl_gl = self.get_cell_cross() 
+        cl_lg, cl_gl = self.get_cell_cross() 
         return cl_ll, cl_gg, cl_lg, cl_gl  
-    
+
+    def get_theory_arrays_3x2pt(self, params_dic):
+        """Compute all theory arrays needed for 3x2pt C_ell and likelihood, without
+        performing the C_ell z-integration or building the data vector. Used by the
+        JAX path: Python does emulators and scipy; JAX does C_ell sums/integrations and likelihood.
+
+        Parameters
+        ----------
+        params_dic : dict
+            Cosmological and survey parameters.
+
+        Returns
+        -------
+        dict
+            With keys: ez, rz, zz_integr, pmm, pgm, pgg, w_gamma, w_ia, w_g,
+            pk_delta_ia, pk_iaia, pk_gal_ia, and survey constants (nell_wl, nell_gc, nell_xc,
+            nbin_s, nbin_l, nbin_flat_s, nbin_flat_l, noise_LL, noise_GG, H0_h_c).
+            All array values are numpy; JAX will convert and JIT from these.
+        """
+        self.ez, self.rz, self.k = self.get_ez_rz_k(params_dic)
+        self.dz, _ = self.StructureEmu.get_growth_binned(params_dic, self.k, self.Survey.lbin, self.Survey.zz_integr) if self.flag_scale_dependence else self.StructureEmu.get_growth(params_dic, self.Survey.zz_integr)
+        self.deltaz_s, self.deltaz_l = self.get_deltaz(params_dic)
+        self.pmm, bar_boost = self.get_pmm(params_dic)
+        self.pmm_no_barboost = self.pmm / bar_boost
+        if self.flag_cross_sqrt_bar_boost:
+            self.pgm = self.get_pgm(params_dic) * np.sqrt(bar_boost[:, :, None])
+        else:
+            self.pgm = self.get_pgm(params_dic)
+        self.pgg = self.get_pgg(params_dic)
+        self.flag_nan = False
+        if np.isnan(self.pgg).any() or np.isnan(self.pgm).any():
+            self.flag_nan = True
+        self.w_gamma = self.get_wl_kernel(params_dic)
+        self.w_ia = self.get_ia_kernel(params_dic)
+        self.pk_delta_ia, self.pk_iaia = self.get_pk_ia(params_dic)
+        self.w_g = self.get_gg_kernel(params_dic)
+        self.pk_gal_ia = self.get_pk_cross_ia(params_dic)
+        ez = np.asarray(self.ez, dtype=np.float64)
+        rz = np.asarray(self.rz, dtype=np.float64)
+        zz = np.asarray(self.Survey.zz_integr, dtype=np.float64)
+        return {
+            'ez': ez,
+            'rz': rz,
+            'zz_integr': zz,
+            'pmm': np.asarray(self.pmm, dtype=np.float64),
+            'pgm': np.asarray(self.pgm, dtype=np.float64),
+            'pgg': np.asarray(self.pgg, dtype=np.float64),
+            'w_gamma': np.asarray(self.w_gamma, dtype=np.float64),
+            'w_ia': np.asarray(self.w_ia, dtype=np.float64),
+            'w_g': np.asarray(self.w_g, dtype=np.float64),
+            'pk_delta_ia': np.asarray(self.pk_delta_ia, dtype=np.float64),
+            'pk_iaia': np.asarray(self.pk_iaia, dtype=np.float64),
+            'pk_gal_ia': np.asarray(self.pk_gal_ia, dtype=np.float64),
+            'nell_wl': int(self.Survey.nell_wl),
+            'nell_gc': int(self.Survey.nell_gc),
+            'nell_xc': int(self.Survey.nell_xc),
+            'nbin_s': int(self.Survey.nbin_s),
+            'nbin_l': int(self.Survey.nbin_l),
+            'nbin_flat_s': int(self.Survey.nbin_flat_s),
+            'nbin_flat_l': int(self.Survey.nbin_flat_l),
+            'noise_LL': float(self.Survey.noise['LL']),
+            'noise_GG': float(self.Survey.noise['GG']),
+            'H0_h_c': H0_h_c,
+        }
+
     def get_deltaz(self, params):
         deltaz_s = deltaz_l = None
         if 'deltaz_1' in params:     
             deltaz_s = np.array([params[f'deltaz_{i+1}'] for i in range(self.Survey.nbin_s)])
             deltaz_l = np.array([params[f'deltaz_{i+1}'] for i in range(self.Survey.nbin_l)])  
-        if 'deltaz_1_s' in params:  
-            deltaz_s = np.array([params[f'deltaz_{i+1}_s'] for i in range(self.Survey.nbin_s)])  
-        if 'deltaz_1_l' in params:    
-            deltaz_l = np.array([params[f'deltaz_{i+1}_l'] for i in range(self.Survey.nbin_l)])  
+        if 'deltaz_s_1' in params:  
+            deltaz_s = np.array([params[f'deltaz_s_{i+1}'] for i in range(self.Survey.nbin_s)])  
+        if 'deltaz_l_1' in params:    
+            deltaz_l = np.array([params[f'deltaz_l_{i+1}'] for i in range(self.Survey.nbin_l)])  
         return deltaz_s, deltaz_l
 
     def compute_data_matrix_3x2pt(self, params_dic):
@@ -1681,26 +1520,36 @@ class Theory:
         denom = self.Survey.fsky * (2*self.Survey.ell+1)
         return ( cl2_sum ) / denom
 
-        
+    def _eval_3x2pt_on_integer_ells(self, params_dic):
+        """Compute 3x2pt C_ell at every integer ell in [lmin, lmax].
+
+        Sets ``Survey.ell`` to that unbinned grid so that
+        ``get_cov_diag_ijkl`` uses the matching (2ell+1) denominator.
+        Restore the binned ell grid with ``_restore_binned_ell`` after
+        the unbinned Knox terms are finished.
+        """
+        n_ell_binned = self.Survey.lbin
+        ell_all_int = np.arange(self.Survey.lmin, self.Survey.lmax + 1).astype(int)
+        self.Survey.lbin = len(ell_all_int)
+        self.Survey.ell = self.Survey.l_wl = self.Survey.l_xc = self.Survey.l_gc = ell_all_int
+        self.Survey.nell_wl = self.Survey.nell_xc = self.Survey.nell_gc = len(ell_all_int)
+        try:
+            cl_ll, cl_gg, cl_lg, cl_gl = self.compute_3x2pt(params_dic)
+        except Exception:
+            self._restore_binned_ell(n_ell_binned)
+            raise
+        return ell_all_int, cl_ll, cl_gg, cl_lg, cl_gl
+
+    def _restore_binned_ell(self, n_ell):
+        self.Survey.ell = self.Survey.l_wl = self.Survey.l_xc = self.Survey.l_gc = self.Survey.l_wl_bin_centers
+        self.Survey.lbin = n_ell
+        self.Survey.nell_wl = self.Survey.nell_xc = self.Survey.nell_gc = n_ell
 
     
     def compute_covariance_cosmosis_3x2pt(self, params_dic):
         n_ell = self.Survey.lbin
         ell_lims = self.Survey.ell_bin_edges
-        ell_all_int = np.arange(self.Survey.lmin, self.Survey.lmax+1).astype(int)
-        self.Survey.lbin = 100
-        ell_vals = np.logspace(log10(self.Survey.lmin), log10(self.Survey.lmax), num=self.Survey.lbin, endpoint=True) 
-        self.Survey.ell = self.Survey.l_wl = self.Survey.l_xc = self.Survey.l_gc = ell_vals
-        self.Survey.nell_wl = self.Survey.nell_xc = self.Survey.nell_gc = len(self.Survey.l_wl)
-
-        cl_ll_, cl_gg_, cl_lg_, cl_gl_ = self.compute_3x2pt(params_dic)
-        cl_ll = build_data_matrix(cl_ll_, ell_vals, ell_all_int, self.Survey.nbin_s, self.Survey.nbin_s)
-        cl_gg = build_data_matrix(cl_gg_, ell_vals, ell_all_int, self.Survey.nbin_l, self.Survey.nbin_l)
-        cl_lg = build_data_matrix(cl_lg_, ell_vals, ell_all_int, self.Survey.nbin_s, self.Survey.nbin_l)
-        cl_gl = build_data_matrix(cl_gl_, ell_vals, ell_all_int, self.Survey.nbin_l, self.Survey.nbin_s)
-        self.Survey.ell = self.Survey.l_wl = self.Survey.l_xc = self.Survey.l_gc = ell_all_int
-        self.Survey.lbin = len(ell_all_int)
-        self.Survey.nell_wl = self.Survey.nell_xc = self.Survey.nell_gc = len(self.Survey.l_wl)
+        ell_all_int, cl_ll, cl_gg, cl_lg, cl_gl = self._eval_3x2pt_on_integer_ells(params_dic)
 
         cl_ll_dic = {'bin_pairs': [(i, j) for i in range(self.Survey.nbin_s) for j in range(i, self.Survey.nbin_s)], 
                     'cls': cl_ll,
@@ -1720,8 +1569,17 @@ class Theory:
                     'name': 'LG',
                     'types': (0, 1)
                     }
-        theory_spectra = [cl_ll_dic, cl_lg_dic, cl_gg_dic]
-        self.types = [cl_ll_dic['types'], cl_lg_dic['types'], cl_gg_dic['types']]
+        cl_gl_dic = {'bin_pairs': [(i, j) for i in range(self.Survey.nbin_l) for j in range(self.Survey.nbin_s)], 
+                    'cls': cl_gl,
+                    'is_auto': False,
+                    'name': 'GL',
+                    'types': (1, 0)
+                    }
+        # old implementation:
+        #theory_spectra = [cl_ll_dic, cl_lg_dic, cl_gg_dic]
+        #self.types = [cl_ll_dic['types'], cl_lg_dic['types'], cl_gg_dic['types']]
+        theory_spectra = [cl_ll_dic, cl_gl_dic, cl_gg_dic]
+        self.types = [cl_ll_dic['types'], cl_gl_dic['types'], cl_gg_dic['types']]
         # Get the starting index in the full datavector for each spectrum
         # this will be used later for adding covariance blocks to the full matrix.
         cl_lengths = [n_ell*self.Survey.nbin_flat_s, n_ell*self.Survey.nbin_s*self.Survey.nbin_l, n_ell*self.Survey.nbin_flat_l]
@@ -1774,10 +1632,88 @@ class Theory:
                         covmat[ cov_inds_T ] = np.diag(cl_var_binned)        
         print('cov_flat: ', covmat.shape)                                      
         covmat_masked = covmat[self.Survey.mask_cov_3x2pt]
-        print('cov_flat_masked: ', covmat_masked.shape)  
-        self.Survey.ell = self.Survey.l_wl = self.Survey.l_xc = self.Survey.l_gc = self.Survey.l_wl_bin_centers
-        self.Survey.lbin = n_ell
-        self.Survey.nell_wl = self.Survey.nell_xc = self.Survey.nell_gc = n_ell
+        print('cov_flat_masked: ', covmat_masked.shape)
+        self._restore_binned_ell(n_ell)
+        return covmat_masked
+
+
+    def compute_covariance_spaceborne_3x2pt(self, params_dic):
+        """Gaussian 3x2pt covariance using Spaceborne's equal-weight bin average.
+
+        C_ell is evaluated at every integer ell in [lmin, lmax], matching
+        Spaceborne's unbinned Knox grid. Unbinned term:
+            Var(C_ell) = (C_ik C_jl + C_il C_jk) / [fsky (2ell+1)]
+        The bin average matches Spaceborne ``cov_hs_g_ell_bin_average=True``:
+            Var_bin = sum_{ell in bin} Var(C_ell) / N_modes^2
+        with integer-ell membership ``int(ell_low) <= ell < int(ell_high)``.
+        """
+        n_ell = self.Survey.lbin
+        ell_lims = self.Survey.ell_bin_edges
+        ell_all_int, cl_ll, cl_gg, cl_lg, cl_gl = self._eval_3x2pt_on_integer_ells(params_dic)
+
+        cl_ll_dic = {'bin_pairs': [(i, j) for i in range(self.Survey.nbin_s) for j in range(i, self.Survey.nbin_s)],
+                    'cls': cl_ll,
+                    'is_auto': True,
+                    'name': 'LL',
+                    'types': (0, 0)
+                    }
+        cl_gg_dic = {'bin_pairs': [(i, j) for i in range(self.Survey.nbin_l) for j in range(i, self.Survey.nbin_l)],
+                    'cls': cl_gg,
+                    'is_auto': True,
+                    'name': 'GG',
+                    'types': (1, 1)
+                    }
+        cl_gl_dic = {'bin_pairs': [(i, j) for i in range(self.Survey.nbin_l) for j in range(self.Survey.nbin_s)],
+                    'cls': cl_gl,
+                    'is_auto': False,
+                    'name': 'GL',
+                    'types': (1, 0)
+                    }
+        theory_spectra = [cl_ll_dic, cl_gl_dic, cl_gg_dic]
+        self.types = [cl_ll_dic['types'], cl_gl_dic['types'], cl_gg_dic['types']]
+        cl_lengths = [n_ell*self.Survey.nbin_flat_s, n_ell*self.Survey.nbin_s*self.Survey.nbin_l, n_ell*self.Survey.nbin_flat_l]
+        cl_starts = []
+        for i in range(3):
+            cl_starts.append(int(sum(cl_lengths[:i])))
+        covmat = np.zeros((n_ell*(self.Survey.nbin_flat_s + self.Survey.nbin_flat_l + self.Survey.nbin_s*self.Survey.nbin_l), n_ell*(self.Survey.nbin_flat_s + self.Survey.nbin_flat_l + self.Survey.nbin_s*self.Survey.nbin_l)), 'float64')
+        for i_cl in range(3):
+            cl_spec_i = theory_spectra[i_cl]
+            for j_cl in range(i_cl, 3):
+                cl_spec_j = theory_spectra[j_cl]
+                cov_blocks = {}
+                for i_bp, bin_pair_i in enumerate(cl_spec_i['bin_pairs']):
+                    for j_bp, bin_pair_j in enumerate(cl_spec_j['bin_pairs']):
+                        if (i_cl == j_cl) and cl_spec_i['is_auto'] and (j_bp < i_bp):
+                            cl_var_binned = cov_blocks[j_bp, i_bp]
+                        else:
+                            cl_var_unbinned = self.get_cov_diag_ijkl(theory_spectra, i_cl,
+                                    j_cl, bin_pair_i, bin_pair_j)
+                            cl_var_binned = np.zeros(n_ell)
+                            for ell_bin in range(n_ell):
+                                ell_lower = int(ell_lims[ell_bin])
+                                ell_upper = int(ell_lims[ell_bin + 1])
+                                mask = (ell_all_int >= ell_lower) & (ell_all_int < ell_upper)
+                                n_modes = np.sum(mask)
+                                if n_modes == 0:
+                                    raise ValueError(
+                                        f'No integer ell modes in bin {ell_bin} '
+                                        f'[{ell_lower}, {ell_upper}).'
+                                    )
+                                cl_var_binned[ell_bin] = np.sum(cl_var_unbinned[mask]) / n_modes**2
+                            cov_blocks[i_bp, j_bp] = cl_var_binned
+
+                        inds_i = np.arange(cl_starts[i_cl] + n_ell*i_bp,
+                            cl_starts[i_cl] + n_ell*(i_bp+1))
+                        inds_j = np.arange(cl_starts[j_cl] + n_ell*j_bp,
+                            cl_starts[j_cl] + n_ell*(j_bp+1))
+                        cov_inds = np.ix_(inds_i, inds_j)
+                        covmat[cov_inds] = np.diag(cl_var_binned)
+                        cov_inds_T = np.ix_(inds_j, inds_i)
+                        covmat[cov_inds_T] = np.diag(cl_var_binned)
+        print('cov_flat: ', covmat.shape)
+        covmat_masked = covmat[self.Survey.mask_cov_3x2pt]
+        print('cov_flat_masked: ', covmat_masked.shape)
+        self._restore_binned_ell(n_ell)
         return covmat_masked
     
     
